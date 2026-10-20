@@ -72,6 +72,7 @@ private:
     void drawTouchControls();
     void updateIntro(float dt);
     void drawIntroBanner();
+    void drawPauseOverlay();
 
     void playCue(const char *asset);
     void playRandomCue(const char *const *paths, int count, const char *tag);
@@ -127,6 +128,7 @@ private:
     bool blue_down_ = false;
     bool red_edge_ = false;
     bool blue_edge_ = false;
+    bool paused_ = false;
     bool tap_pending_ = false;
     float tap_x_ = 0.0f;
     float tap_y_ = 0.0f;

@@ -84,7 +84,8 @@ void GameRenderer::shutdown() {
     if (stick_arrows_.valid()) glDeleteTextures(1, &stick_arrows_.id);
     for (Texture *texture : {&ui_background_, &title_logo_, &tap_to_start_, &superstar_frame_,
                              &superstar_select_, &arrow_previous_, &arrow_next_, &arrow_point_,
-                             &button_strip_}) {
+                             &button_strip_, &pause_button_, &pause_button_pressed_,
+                             &pause_background_, &pause_menu_button_}) {
         if (texture->valid()) glDeleteTextures(1, &texture->id);
     }
     for (auto &bundle : bundles_) {
@@ -170,6 +171,10 @@ bool GameRenderer::loadUi() {
     load("ui/Sprites/UI/selector/next.png", &arrow_next_);
     load("ui/Sprites/UI/selector/point.png", &arrow_point_);
     load("ui/Sprites/UI/main_menu/main_button_0.png", &button_strip_);
+    load("graphics/Sprites/virtual_pad/pause_btn.png", &pause_button_);
+    load("graphics/Sprites/virtual_pad/pause_btn_clicked.png", &pause_button_pressed_);
+    load("ui/Sprites/UI/pause/background.png", &pause_background_);
+    load("ui/Sprites/UI/pause/button.png", &pause_menu_button_);
     return true;
 }
 

@@ -638,7 +638,7 @@ void Wrestler::tickGrapple(float dt, Match &match, const InputFrame &input) {
     const int s = subState();
     if (s == state::GRAPPLE_IDLE) {
         // The human wins by pressing a button; the AI drives its own beat.
-        if (input.anyButtonEdge()) {
+        if (input.anyButtonEdge() && profile_ != nullptr && data_ != nullptr) {
             const StatusSlot &slot = profile_->status[1];
             for (int i = 0; i < slot.list_count && i < 4; ++i) {
                 const int id = slot.attack[static_cast<std::size_t>(i)];

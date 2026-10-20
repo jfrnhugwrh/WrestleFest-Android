@@ -30,6 +30,12 @@ constexpr float kBlueX = 565.0f;
 constexpr float kBlueY = 425.0f;
 constexpr float kRedRadius = 62.0f;
 constexpr float kBlueRadius = 52.0f;
+// Pause button and the two choices of the pause menu.
+constexpr float kPauseX = 930.0f;
+constexpr float kPauseY = 592.0f;
+constexpr float kPauseRadius = 34.0f;
+constexpr float kResumeY = 268.0f;
+constexpr float kQuitY = 336.0f;
 
 bool insideCircle(float x, float y, float cx, float cy, float radius) {
     const float dx = x - cx;
@@ -178,6 +184,7 @@ void GameApp::update(double frame_seconds) {
             break;
         }
         case Scene::Match: {
+            if (paused_) break;
             if (intro_stage_ != IntroStage::Done) {
                 updateIntro(static_cast<float>(frame_seconds));
                 // The sim still ticks so the entrance animation plays.
@@ -345,6 +352,25 @@ void GameApp::stepSimulation(float dt) {
 // Touch
 // ---------------------------------------------------------------------------
 void GameApp::touchDown(int pointer_id, float x, float y) {
+    if (scene_ == Scene::Match && paused_) {
+        if (x > 300.0f && x < 660.0f) {
+            if (y > kResumeY - 30.0f && y < kResumeY + 30.0f) {
+                paused_ = false;
+                playCue("audio/sfx/Attack01.wav");
+            } else if (y > kQuitY - 30.0f && y < kQuitY + 30.0f) {
+                paused_ = false;
+                scene_ = Scene::Select;
+            }
+        }
+        return;
+    }
+    if (scene_ == Scene::Match && insideCircle(x, y, kPauseX, kPauseY, kPauseRadius)) {
+        paused_ = true;
+        stick_.active = false;
+        red_down_ = blue_down_ = false;
+        stick_dir_x_ = stick_dir_y_ = 0.0f;
+        return;
+    }
     if (scene_ != Scene::Match) {
         tap_pending_ = true;
         tap_x_ = x;
@@ -435,6 +461,7 @@ void GameApp::render(int viewport_x, int viewport_y, int viewport_w, int viewpor
             } else {
                 drawTouchControls();
             }
+            if (paused_) drawPauseOverlay();
             break;
         case Scene::Result:
             renderer_.drawMatch(match_, 0.0f);
@@ -567,6 +594,32 @@ void GameApp::drawResult() {
                                Color{0.9f, 0.9f, 0.95f, 1.0f});
 }
 
+void GameApp::drawPauseOverlay() {
+    SpriteBatch &batch = renderer_.batch();
+    if (renderer_.pauseMenuBackground().valid()) {
+        batch.draw(renderer_.pauseMenuBackground(), 0.0f, 0.0f, 960.0f, 640.0f,
+                   Color{1.0f, 1.0f, 1.0f, 0.92f});
+    } else {
+        batch.draw(renderer_.white(), 0.0f, 0.0f, 960.0f, 640.0f, Color{0.0f, 0.0f, 0.0f, 0.75f});
+    }
+    renderer_.drawTextCentered("PAUSED", 480.0f, 170.0f, 1.5f, Color{1.0f, 0.85f, 0.3f, 1.0f});
+
+    auto row = [&](const char *label, float y) {
+        if (renderer_.pauseMenuButton().valid()) {
+            batch.draw(renderer_.pauseMenuButton(), 480.0f - 368.0f, y, 736.0f, 51.0f,
+                       Color{1.0f, 1.0f, 1.0f, 0.95f});
+        } else {
+            batch.draw(renderer_.white(), 480.0f - 300.0f, y, 600.0f, 51.0f,
+                       Color{0.2f, 0.25f, 0.35f, 1.0f});
+        }
+        renderer_.drawTextCentered(label, 480.0f, y + 10.0f, 0.75f, Color{1.0f, 1.0f, 1.0f, 1.0f});
+    };
+    row("RESUME", kResumeY);
+    row("QUIT TO SELECT", kQuitY);
+    renderer_.drawTextCentered("tap the pause button again to keep playing", 480.0f, 560.0f, 0.4f,
+                               Color{0.8f, 0.85f, 0.95f, 1.0f});
+}
+
 void GameApp::drawIntroBanner() {
     SpriteBatch &batch = renderer_.batch();
     batch.draw(renderer_.white(), 0.0f, 500.0f, 960.0f, 140.0f, Color{0.0f, 0.0f, 0.0f, 0.55f});
@@ -646,6 +699,12 @@ void GameApp::drawTouchControls() {
                red_down_);
     drawButton(renderer_.blueButton(), renderer_.blueButtonIcon(), kBlueX, kBlueY, kBlueRadius,
                blue_down_);
+
+    // Pause button, bottom right, as in the original.
+    if (renderer_.pauseButton().valid()) {
+        batch.draw(renderer_.pauseButton(), kPauseX - kPauseRadius, kPauseY - kPauseRadius,
+                   kPauseRadius * 2.0f, kPauseRadius * 2.0f, Color{1.0f, 1.0f, 1.0f, 0.6f});
+    }
 
     // Mash prompt while the player is caught in a pin.
     const Wrestler *player = match_.wrestler(0);

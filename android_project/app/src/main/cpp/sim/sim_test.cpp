@@ -120,8 +120,7 @@ int main(int argc, char **argv) {
         match.configure(&data, ring, 0, 0x1u);
         const WrestlerProfile *cena = data.wrestlerByFolder("00_John Cena");
         match.addWrestler(cena, 0, ring.centerX(), ring.centerZ(), 1.0f);
-        match.addWrestler(data.wrestlerByFolder("03_BigShow"), 1, ring.centerX() + 200.0f,
-                          ring.centerZ(), -1.0f);
+        // No opponent: the walk cycle test must not be interrupted by a hit.
         match.start();
         std::vector<InputFrame> inputs(2);
         inputs[0].right = true;
@@ -264,6 +263,66 @@ int main(int argc, char **argv) {
             check(w->state_depth >= 0 && w->state_depth < tuning::kStateStackDepth,
                   "state stack stays within 4");
         }
+    }
+
+    // ------------------------------------------------------------------
+    std::printf("[royal rumble]\n");
+    {
+        // Rule 2: no time limit, 30 % toss-out on every lost grapple beat, and
+        // the last man standing wins.
+        const RuleInfo *rumble = data.rule(2);
+        check(rumble != nullptr && rumble->max_match_time >= 9000.0f, "the rumble has no clock");
+        check(rumble != nullptr && std::fabs(rumble->toss_out_percentage - 30.0f) < 0.01f,
+              "the rumble tosses out on 30 %");
+
+        Match match;
+        match.configure(&data, ring, 2, 0x1234u);
+        const char *const folders[4] = {"00_John Cena", "03_BigShow", "05_Kane", "06_Bartista"};
+        for (int i = 0; i < 4; ++i) {
+            // Everyone for himself: the team index is meaningless in a rumble.
+            match.addWrestler(data.wrestlerByFolder(folders[i]), i,
+                              ring.centerX() - 150.0f + 100.0f * i, ring.centerZ(), 1.0f);
+        }
+        match.setAiControlled(0, true);
+        match.setAiControlled(1, true);
+        match.setAiControlled(2, true);
+        match.setAiControlled(3, true);
+        match.start();
+        std::vector<InputFrame> inputs(4);
+        int eliminations = 0;
+        float seconds = 0.0f;
+        for (int step = 0; step < 60 * 600 && match.phase() != MatchPhase::Finished; ++step) {
+            match.update(1.0f / 60.0f, inputs);
+            for (const SimEvent &event : match.events()) {
+                if (event.type == EventType::KnockedOut) ++eliminations;
+            }
+            match.clearEvents();
+            seconds += 1.0f / 60.0f;
+        }
+        std::printf("  info rumble ran %.1fs, %d eliminations, phase %d\n", seconds, eliminations,
+                    static_cast<int>(match.phase()));
+        check(eliminations >= 1, "wrestlers are thrown out over the top rope");
+
+        // The rule itself: with one man left the match must be over and he must
+        // be the winner. Force the remaining eliminations to keep the test fast.
+        for (int i = 0; i < 3 && match.phase() != MatchPhase::Finished; ++i) {
+            Wrestler *w = match.wrestler(i);
+            if (w != nullptr && !w->isDead()) w->knockOut(match);
+            std::vector<InputFrame> idle(4);
+            match.update(1.0f / 60.0f, idle);
+        }
+        check(match.phase() == MatchPhase::Finished, "the rumble ends with one man standing");
+        int standing = 0;
+        int survivor = -1;
+        for (int i = 0; i < 4; ++i) {
+            if (!match.wrestler(i)->isDead()) {
+                ++standing;
+                survivor = i;
+            }
+        }
+        check(standing == 1, "exactly one wrestler is left in the ring");
+        check(survivor >= 0 && match.winnerTeam() == match.wrestler(survivor)->team,
+              "the survivor's side wins");
     }
 
     // ------------------------------------------------------------------

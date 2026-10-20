@@ -66,6 +66,9 @@ public:
     const Texture &arrowNext() const { return arrow_next_; }
     const Texture &arrowPoint() const { return arrow_point_; }
     const Texture &buttonStrip() const { return button_strip_; }
+    const Texture &pauseButton() const { return pause_button_; }
+    const Texture &pauseMenuBackground() const { return pause_background_; }
+    const Texture &pauseMenuButton() const { return pause_menu_button_; }
 
     const Texture &stickBase() const { return virtual_stick_base_; }
     const Texture &stickIcon() const { return virtual_stick_icon_; }
@@ -123,6 +126,10 @@ private:
     Texture arrow_next_;
     Texture arrow_point_;
     Texture button_strip_;
+    Texture pause_button_;
+    Texture pause_button_pressed_;
+    Texture pause_background_;
+    Texture pause_menu_button_;
     Texture label_1p_;
     Texture label_2p_;
     Texture ref_count_[10];

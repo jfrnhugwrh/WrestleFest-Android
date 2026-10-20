@@ -110,8 +110,36 @@ void Match::setAiControlled(int index, bool controlled) {
     ai_controlled_[static_cast<std::size_t>(index)] = controlled;
 }
 
+void Match::updateOpponents() {
+    for (int i = 0; i < wrestlerCount(); ++i) {
+        Wrestler *self = wrestler(i);
+        if (self == nullptr || self->isDead()) continue;
+        // A wrestler in the middle of a paired move keeps its partner: the pair
+        // must stay aligned until the animation finishes.
+        if (self->isBusy() && self->opponentId() >= 0) continue;
+        int best = -1;
+        float best_distance = 0.0f;
+        for (int j = 0; j < wrestlerCount(); ++j) {
+            if (j == i) continue;
+            Wrestler *other = wrestler(j);
+            if (other == nullptr || other->isDead() || !other->active ||
+                other->team == self->team) {
+                continue;
+            }
+            const float distance = lengthX(self->x, other->x) +
+                                   std::fabs(self->z - other->z) * 0.5f;
+            if (best < 0 || distance < best_distance) {
+                best_distance = distance;
+                best = j;
+            }
+        }
+        if (best >= 0) self->setOpponent(best);
+    }
+}
+
 void Match::update(float dt, const std::vector<InputFrame> &inputs) {
     clock_ += dt;
+    updateOpponents();
 
     if (phase_ == MatchPhase::Intro && auto_start_) {
         intro_timer_ += dt;
@@ -214,6 +242,18 @@ void Match::updateGrappleBeats(float dt) {
                 }
             }
         } else {
+            // Royal Rumble toss-out: the loser of the beat is thrown over the top
+            // rope when the rule's TossOutPercentage roll succeeds. This is the
+            // only way a rumble ends (GAMEPLAY_IMPLEMENTATION 4.4).
+            if (isRumble() && rule_ != nullptr) {
+                const float roll = static_cast<float>(rng_.range(1000)) * 0.1f;  // 0.0-99.9
+                if (roll < rule_->toss_out_percentage) {
+                    w->knockOut(*this);
+                    emit({EventType::KnockedOut, w->id(), other->id(), roll, state::LOSE});
+                    continue;
+                }
+            }
+
             // The victim reverses: the tables give both sides the same slot.
             Wrestler *attacker = other;
             Wrestler *victim = w;
@@ -343,6 +383,23 @@ void Match::tryPinAttempts() {
 
 void Match::checkWinConditions(float dt) {
     (void)dt;
+
+    // Royal Rumble: last wrestler still standing wins. Each entrant is his own
+    // side, so the team checks below do not apply.
+    if (isRumble()) {
+        int alive = 0;
+        int winner = -1;
+        for (int i = 0; i < wrestlerCount(); ++i) {
+            const Wrestler *w = wrestler(i);
+            if (w == nullptr || w->isDead()) continue;
+            ++alive;
+            winner = i;
+        }
+        if (alive <= 1 && wrestlerCount() > 1) {
+            finish(winner >= 0 ? wrestler(winner)->team : 0);
+        }
+        return;
+    }
 
     // 1. Pinfall: the referee reached MaxRefereeCount with a wrestler pinned.
     if (rule_ != nullptr && rule_->can_pin && referee_.count() >= referee_.maxCount()) {

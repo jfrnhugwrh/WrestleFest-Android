@@ -98,6 +98,9 @@ private:
     void updateRegions();
     void tryPinAttempts();
     void resolveCollisions();
+    // CWrestler::GetOpponent: every wrestler points at its nearest live enemy.
+    // Paired moves keep the opponent they started with.
+    void updateOpponents();
 
     const GameData *data_ = nullptr;
     const RuleInfo *rule_ = nullptr;
