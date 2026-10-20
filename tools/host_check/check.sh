@@ -18,6 +18,7 @@ for f in \
     "$SRC"/obb_archive.cpp \
     "$SRC"/asset_loader.cpp \
     "$SRC"/game/game_renderer.cpp \
+    "$SRC"/game/menu_screens.cpp \
     "$SRC"/game/app.cpp \
     "$SRC"/main.cpp
 do

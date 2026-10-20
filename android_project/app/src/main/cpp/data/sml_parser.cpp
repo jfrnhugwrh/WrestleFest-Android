@@ -63,12 +63,13 @@ void parseStringValue(const std::string &raw, std::string *out) {
     if (s.size() >= 2 && s.front() == '"' && s.back() == '"') {
         s = s.substr(1, s.size() - 2);
     }
-    // The tables escape an apostrophe by doubling it ("Jake ''The Snake''").
+    // A double quote inside a quoted string is written as two apostrophes
+    // ("Jake ''The Snake'' Roberts"); the game shows it as a double quote.
     std::string unescaped;
     unescaped.reserve(s.size());
     for (std::size_t i = 0; i < s.size(); ++i) {
         if (s[i] == '\'' && i + 1 < s.size() && s[i + 1] == '\'') {
-            unescaped.push_back('\'');
+            unescaped.push_back('"');
             ++i;
         } else {
             unescaped.push_back(s[i]);

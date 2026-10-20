@@ -254,6 +254,7 @@ bool AudioPlayer::prepareWavBytes(const std::vector<std::uint8_t>& wav) {
 }
 
 bool AudioPlayer::play() {
+    if (muted_) return true;
     if (player_ == nullptr || queue_ == nullptr || pcm_.empty()) {
         __android_log_print(ANDROID_LOG_ERROR, kLogTag, "Audio playback requested before WAV preparation");
         return false;
@@ -398,6 +399,7 @@ AudioPlayer::Cue* AudioPlayer::cueFor(const std::string& asset_path) {
 }
 
 bool AudioPlayer::playAsset(AssetLoader* assets, const std::string& asset_path) {
+    if (muted_) return true;
     if (assets == nullptr || !initialize()) return false;
     Cue* cue = cueFor(asset_path);
     if (cue == nullptr) return false;

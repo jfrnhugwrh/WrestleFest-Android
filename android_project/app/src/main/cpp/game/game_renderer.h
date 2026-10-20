@@ -52,25 +52,45 @@ public:
     void drawHud(const Match &match, int player_index);
 
     SpriteBatch &batch() { return batch_; }
+    // Body face (Arial Rounded MT Bold): HUD, result card, prompts.
     BitmapFont &font() { return font_; }
+    // Menu face (Century Gothic): every front-end caption.
+    BitmapFont &menuFont() { return menu_font_; }
 
     // Assets the app shell draws itself (virtual pad, plain fills).
     const Texture &white() const { return white_; }
     // Front-end art (title / select / pause).
     const Texture &uiBackground() const { return ui_background_; }
+    const Texture &uiBackground2() const { return ui_background_2_; }
     const Texture &titleLogo() const { return title_logo_; }
     const Texture &tapToStart() const { return tap_to_start_; }
     const Texture &superstarFrame() const { return superstar_frame_; }
     const Texture &superstarSelect() const { return superstar_select_; }
+    const Texture &arenaFrame() const { return arena_frame_; }
+    const Texture &arenaSelect() const { return arena_select_; }
+    const Texture &mainButton(int index) const {
+        return index >= 0 && index < 4 ? main_button_[index] : white_;
+    }
+    const Texture &modeButton(int index) const {
+        return index >= 0 && index < 6 ? mode_button_[index] : white_;
+    }
+    const Texture &wweLogo() const { return wwe_logo_; }
+    const Texture &backButton() const { return back_button_; }
     const Texture &arrowPrevious() const { return arrow_previous_; }
     const Texture &arrowNext() const { return arrow_next_; }
     const Texture &arrowPoint() const { return arrow_point_; }
+    const Texture &arrowPointSelect() const { return arrow_point_select_; }
     const Texture &buttonStrip() const { return button_strip_; }
     const Texture &pauseButton() const { return pause_button_; }
     const Texture &reportFrame() const { return report_frame_; }
     const Texture &reportBackground() const { return report_background_; }
     const Texture &pauseMenuBackground() const { return pause_background_; }
     const Texture &pauseMenuButton() const { return pause_menu_button_; }
+
+    // Front-end portraits and arena thumbnails are read on demand (a page of
+    // eight is at most a megabyte) and then kept for the life of the app.
+    const Texture &avatarFor(const std::string &wrestler_folder);
+    const Texture &arenaSceneFor(const std::string &arena_folder);
 
     const Texture &stickBase() const { return virtual_stick_base_; }
     const Texture &stickIcon() const { return virtual_stick_icon_; }
@@ -83,6 +103,18 @@ public:
     void drawText(const std::string &text, float x, float y, float scale, const Color &color);
     void drawTextCentered(const std::string &text, float center_x, float y, float scale,
                           const Color &color);
+    // Menu captions: the Century Gothic face, positioned on the capital ink so
+    // a row of text can be centred inside a button strip.
+    void drawMenuTextCentered(const std::string &text, float center_x, float ink_top, float size,
+                              const Color &color, float tracking, float shadow_offset);
+    void drawMenuText(const std::string &text, float x, float ink_top, float size,
+                      const Color &color, float tracking, float shadow_offset);
+    float measureMenuText(const std::string &text, float size, float tracking) const;
+    // Logo art on the loading screen is tilted; the batch has no rotation, so
+    // the quad corners are rotated here.
+    void drawRotated(const Texture &texture, float center_x, float center_y, float w, float h,
+                     float degrees, const Color &color);
+    float measureText(const std::string &text, float scale) const { return font_.measure(text, scale); }
 
     static constexpr int kLogicalWidth = 960;
     static constexpr int kLogicalHeight = 640;
@@ -119,6 +151,7 @@ private:
 
     SpriteBatch batch_;
     BitmapFont font_;
+    BitmapFont menu_font_;
     const GameData *data_ = nullptr;
     AssetLoader *assets_ = nullptr;
     ArenaAssets arena_;
@@ -127,13 +160,21 @@ private:
     EnergyBarAssets energy_pair_;    // UI_energy02_* (2 vs 2)
     EnergyBarAssets energy_multi_;   // UI_energy03_* (rumble)
     Texture ui_background_;
+    Texture ui_background_2_;
     Texture title_logo_;
     Texture tap_to_start_;
     Texture superstar_frame_;
     Texture superstar_select_;
+    Texture arena_frame_;
+    Texture arena_select_;
+    Texture main_button_[4];
+    Texture mode_button_[6];
+    Texture wwe_logo_;
+    Texture back_button_;
     Texture arrow_previous_;
     Texture arrow_next_;
     Texture arrow_point_;
+    Texture arrow_point_select_;
     Texture button_strip_;
     Texture pause_button_;
     Texture pause_button_pressed_;
@@ -184,6 +225,9 @@ private:
     bool openBundle(BundleCache *cache, const std::string &folder);
     std::unordered_map<std::string, BundleCache> bundles_;
     std::size_t texture_budget_ = 0;
+    // Menu art loaded on demand: wrestler avatars and arena thumbnails.
+    std::unordered_map<std::string, Texture> avatars_;
+    std::unordered_map<std::string, Texture> arena_scenes_;
 
     float logical_to_scale_ = 0.72f;
 };
