@@ -106,7 +106,11 @@ void AiEntity::tickWalk(float dt, Match &match, InputFrame *input) {
     // WalkState: approach until in striking range, then engage.
     const float dx = other->x - self->x;
     const float dz = other->z - self->z;
-    const float engage_range = 110.0f;
+    // Strike reach from the state table (PUNCH CollisionRangeX).
+    const StateInfo *punch = match.data().stateInfo(state::PUNCH);
+    const float engage_range = punch != nullptr && punch->collision_range_x > 0.0f
+                                   ? punch->collision_range_x
+                                   : 110.0f;
     if (std::fabs(dx) > engage_range || std::fabs(dz) > match.common().collision_range_z) {
         stickToward(input, dx, dz * 0.6f);
         timer += tuning::kFixedDelta;
@@ -180,7 +184,12 @@ void AiEntity::tickAttack(float dt, Match &match, InputFrame *input) {
 
     const float dx = other->x - self->x;
     const float dz = other->z - self->z;
-    const bool in_range = std::fabs(dx) <= 120.0f &&
+    // A little closer than strike reach: the AI commits to the clash here.
+    const StateInfo *punch = match.data().stateInfo(state::PUNCH);
+    const float reach = punch != nullptr && punch->collision_range_x > 0.0f
+                            ? punch->collision_range_x + 10.0f
+                            : 120.0f;
+    const bool in_range = std::fabs(dx) <= reach &&
                           std::fabs(dz) <= match.common().collision_range_z;
     if (!in_range) {
         stickToward(input, dx, dz);

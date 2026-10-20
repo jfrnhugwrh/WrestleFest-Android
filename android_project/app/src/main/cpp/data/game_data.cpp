@@ -562,6 +562,58 @@ bool GameData::loadWrestlers(AssetSource *source, const std::string &root, std::
             }
         }
 
+        // SFXTable.sml - the announcer calls.
+        path = root + "/Wrestler/" + folder + "/SFXTable.sml";
+        if (source->read(path, &bytes)) {
+            SmlDocument sfx_doc;
+            std::string parse_error;
+            if (sfx_doc.parse(reinterpret_cast<const char *>(bytes.data()), bytes.size(),
+                              &parse_error)) {
+                for (const SmlRecord &record : sfx_doc.records) {
+                    SfxInfo cue;
+                    cue.id = record.integer("ID");
+                    cue.title = record.string("Title");
+                    cue.file_name = record.string("FileName");
+                    cue.volume = static_cast<float>(record.number("Volume", 1.0));
+                    cue.length = static_cast<float>(record.number("Length", 0.0));
+                    if (!cue.file_name.empty()) profile.sfx.push_back(std::move(cue));
+                }
+            }
+        }
+
+        // EntranceInfo.sml - which WrestlerAT animations the entrance plays.
+        path = root + "/Wrestler/" + folder + "/EntranceInfo.sml";
+        if (source->read(path, &bytes)) {
+            SmlDocument entrance_doc;
+            std::string parse_error;
+            if (entrance_doc.parse(reinterpret_cast<const char *>(bytes.data()), bytes.size(),
+                                   &parse_error) &&
+                !entrance_doc.records.empty()) {
+                const SmlRecord &record = entrance_doc.records.front();
+                profile.entrance.walk_factor =
+                    static_cast<float>(record.number("WalkFactor", 24.0));
+                profile.entrance.run_factor =
+                    static_cast<float>(record.number("RunFactor", 150.0));
+                const SmlField *list = record.find("AnimList");
+                if (list != nullptr) {
+                    for (double value : list->numbers) {
+                        const int anim = static_cast<int>(value);
+                        if (anim >= 0) profile.entrance.anims.push_back(anim);
+                    }
+                }
+            }
+        }
+
+        // A wrestler with no EntranceInfo still gets a usable intro.
+        if (profile.entrance.anims.empty()) {
+            for (const AnimInfo &anim : anims_) {
+                if (anim.name == "Entrance" || anim.name == "Entrance 1") {
+                    profile.entrance.anims.push_back(anim.id);
+                    break;
+                }
+            }
+        }
+
         wrestlers_.push_back(std::move(profile));
     }
     return true;

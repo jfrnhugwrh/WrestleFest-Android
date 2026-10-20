@@ -26,6 +26,7 @@ constexpr int kLogicalHeight = 640;
 class Renderer {
 public:
     void setAssets(AssetLoader* assets) { assets_ = assets; }
+    void setAudio(AudioPlayer* audio) { audio_ = audio; }
 
     bool initialize(ANativeWindow* window) {
         display_ = eglGetDisplay(EGL_DEFAULT_DISPLAY);
@@ -81,7 +82,7 @@ public:
         }
 
         // The game needs a current GL context before it can upload textures.
-        app_ready_ = app_.initialize(assets_);
+        app_ready_ = app_.initialize(assets_, audio_);
         if (!app_ready_) {
             __android_log_print(ANDROID_LOG_ERROR, kLogTag, "game init failed: %s",
                                 app_.error().c_str());
@@ -199,6 +200,7 @@ private:
     legacy_viewport::ViewportManager viewport_{kLogicalWidth, kLogicalHeight};
     legacy_viewport::IntRect content_{};
     AssetLoader* assets_ = nullptr;
+    AudioPlayer* audio_ = nullptr;
     wrestlefest::GameApp app_;
     bool app_ready_ = false;
     std::chrono::steady_clock::time_point last_tick_{};
@@ -285,6 +287,7 @@ extern "C" void android_main(android_app* app) {
 
     AudioPlayer audio;
     audio.prepareWav(&assets, "audio/sfx/Attack01.wav");
+    renderer.setAudio(&audio);
     app->userData = &renderer;
     app->onAppCmd = handleAppCommand;
 

@@ -364,6 +364,22 @@ struct SpriteEntry {  // wrestlerData.sml - SpriteOffset rows
     float y_offset = 0.0f;
 };
 
+// SFXTable.sml - the per-wrestler voice cues (the ring announcer's name call).
+struct SfxInfo {
+    int id = 0;
+    std::string title;      // "Intro", "Tag Intro"
+    std::string file_name;  // "RA_JR_SSN_BIGSHOW_0.wav"
+    float volume = 1.0f;
+    float length = 0.0f;    // seconds
+};
+
+// EntranceInfo.sml - the entrance walk that plays before the bell.
+struct EntranceInfo {
+    float walk_factor = 24.0f;
+    float run_factor = 150.0f;
+    std::vector<int> anims;  // WrestlerAT ids played in order
+};
+
 struct WrestlerProfile {
     int id = 0;
     std::string name;
@@ -375,6 +391,17 @@ struct WrestlerProfile {
     std::array<StatusSlot, 9> status{};
     std::vector<SpriteEntry> sprites;                 // indexed by sst id
     std::unordered_map<std::string, int> sprite_index;  // name -> id
+    std::vector<SfxInfo> sfx;                         // SFXTable.sml
+    EntranceInfo entrance;                            // EntranceInfo.sml
+
+    // The ring announcer's call for this wrestler, e.g.
+    // "audio/sfx/RA_JR_SSN_JOHNCENA_0.wav". Empty when the table has no row.
+    const SfxInfo *introCue() const {
+        for (const SfxInfo &cue : sfx) {
+            if (cue.title == "Intro" && !cue.file_name.empty()) return &cue;
+        }
+        return sfx.empty() ? nullptr : &sfx.front();
+    }
 
     const SpriteEntry *spriteFor(int sst_id) const {
         if (sst_id < 0 || sst_id >= static_cast<int>(sprites.size())) return nullptr;

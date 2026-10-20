@@ -1,5 +1,7 @@
 #include "app.h"
 
+#include "../audio_player.h"
+
 #include <android/log.h>
 
 #include <algorithm>
@@ -7,6 +9,9 @@
 #include <cstdio>
 
 namespace wrestlefest {
+
+using ::AudioPlayer;
+
 namespace {
 
 constexpr char kLogTag[] = "WrestleFestApp";
@@ -54,8 +59,9 @@ bool LoaderAssetSource::exists(const std::string &path) {
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
-bool GameApp::initialize(AssetLoader *assets) {
+bool GameApp::initialize(AssetLoader *assets, AudioPlayer *audio) {
     assets_ = assets;
+    audio_ = audio;
     source_ = LoaderAssetSource(assets);
 
     std::string error;
@@ -111,7 +117,15 @@ void GameApp::startMatch(const WrestlerProfile *player, const WrestlerProfile *o
     match_.addWrestler(opponent, 1, ring.centerX() + 110.0f, ring.centerZ() + 20.0f, -1.0f);
     match_.setAiControlled(0, false);  // the human
     match_.setAiControlled(1, true);
-    match_.start();
+    // The flow owns the bell: entrance first, then the announcer, then FIGHT.
+    match_.allowAutoStart(false);
+    match_.playEntrance();
+
+    intro_stage_ = IntroStage::Entrance;
+    intro_timer_ = 0.0f;
+    intro_stage_length_ = 3.2f;
+    // Entrance music: the original streams a track per superstar; the WAV cue
+    // set here is the announcer, which plays on the announce beats below.
     inputs_.assign(2, InputFrame{});
     accumulator_ = 0.0;
     finish_hold_ = 0.0f;
@@ -145,18 +159,38 @@ void GameApp::update(double frame_seconds) {
             const float y = tap_y_;
             const int count = static_cast<int>(data_.wrestlers().size());
             if (count <= 1) break;
-            // Bottom = fight, left half = player, right half = opponent.
-            if (y > 430.0f && x > 300.0f && x < 660.0f) {
+            const bool on_fight = y > 480.0f && x > 60.0f && x < 900.0f;
+            if (on_fight) {
                 startMatch(&data_.wrestlers()[static_cast<std::size_t>(selected_player_)],
                            &data_.wrestlers()[static_cast<std::size_t>(selected_opponent_)]);
             } else if (x < 480.0f) {
+                // Left panel: tap the arrows/portrait to cycle the player.
                 selected_player_ = (selected_player_ + 1) % count;
+                if (selected_player_ == selected_opponent_) {
+                    selected_player_ = (selected_player_ + 1) % count;
+                }
             } else {
                 selected_opponent_ = (selected_opponent_ + 1) % count;
+                if (selected_opponent_ == selected_player_) {
+                    selected_opponent_ = (selected_opponent_ + 1) % count;
+                }
             }
             break;
         }
         case Scene::Match: {
+            if (intro_stage_ != IntroStage::Done) {
+                updateIntro(static_cast<float>(frame_seconds));
+                // The sim still ticks so the entrance animation plays.
+                accumulator_ += frame_seconds;
+                int intro_steps = 0;
+                while (accumulator_ >= tuning::kFixedDelta &&
+                       intro_steps < tuning::kMaxStepsPerFrame) {
+                    match_.update(tuning::kFixedDelta, inputs_);
+                    accumulator_ -= tuning::kFixedDelta;
+                    ++intro_steps;
+                }
+                break;
+            }
             accumulator_ += frame_seconds;
             int steps = 0;
             while (accumulator_ >= tuning::kFixedDelta && steps < tuning::kMaxStepsPerFrame) {
@@ -197,24 +231,108 @@ void GameApp::update(double frame_seconds) {
     }
 }
 
+void GameApp::updateIntro(float dt) {
+    intro_timer_ += dt;
+    if (intro_timer_ < intro_stage_length_) return;
+    intro_timer_ = 0.0f;
+
+    const WrestlerProfile *player = data_.wrestlers().empty()
+                                        ? nullptr
+                                        : &data_.wrestlers()[static_cast<std::size_t>(selected_player_)];
+    const WrestlerProfile *opponent = data_.wrestlers().empty()
+                                          ? nullptr
+                                          : &data_.wrestlers()[static_cast<std::size_t>(selected_opponent_)];
+    auto announce = [&](const WrestlerProfile *profile) {
+        const SfxInfo *cue = profile != nullptr ? profile->introCue() : nullptr;
+        if (cue == nullptr) return 1.2f;
+        playCue(("audio/sfx/" + cue->file_name).c_str());
+        // Hold on the call for its own length (the table stores it).
+        return cue->length > 0.0f ? cue->length : 2.5f;
+    };
+
+    switch (intro_stage_) {
+        case IntroStage::Entrance:
+            intro_stage_ = IntroStage::AnnouncePlayer;
+            intro_stage_length_ = announce(player);
+            break;
+        case IntroStage::AnnouncePlayer:
+            intro_stage_ = IntroStage::AnnounceOpponent;
+            intro_stage_length_ = announce(opponent);
+            break;
+        case IntroStage::AnnounceOpponent:
+            intro_stage_ = IntroStage::Fight;
+            intro_stage_length_ = 1.1f;
+            playCue("audio/sfx/9011_Large_Crowd_F01.wav");
+            break;
+        case IntroStage::Fight:
+            intro_stage_ = IntroStage::Done;
+            intro_stage_length_ = 0.0f;
+            match_.start();  // the bell
+            break;
+        case IntroStage::Done:
+            break;
+    }
+}
+
+void GameApp::playCue(const char *asset) {
+    if (audio_ == nullptr || assets_ == nullptr || asset == nullptr) return;
+    audio_->playAsset(assets_, asset);
+}
+
+void GameApp::playRandomCue(const char *const *paths, int count, const char *tag) {
+    if (count <= 0) return;
+    const std::uint32_t roll = match_.rng().next();
+    playCue(paths[roll % static_cast<std::uint32_t>(count)]);
+    (void)tag;
+}
+
 void GameApp::stepSimulation(float dt) {
     match_.update(dt, inputs_);
+
+    // Sound cues are event-driven, exactly like the original: the simulation
+    // itself never touches audio (GAMEPLAY_IMPLEMENTATION 2.3).
+    static const char *const kHitCues[] = {"audio/sfx/Attack01.wav", "audio/sfx/Attack02.wav",
+                                           "audio/sfx/Attack03.wav"};
+    static const char *const kPainCues[] = {"audio/sfx/Pain01.wav", "audio/sfx/Pain02.wav",
+                                            "audio/sfx/Pain03.wav"};
+    static const char *const kEffortCues[] = {"audio/sfx/Effort01.wav", "audio/sfx/Effort02.wav",
+                                              "audio/sfx/Effort03.wav"};
+    static const char *const kCrowdCues[] = {"audio/sfx/9010_Short_Crowd.wav",
+                                             "audio/sfx/9007_Small_Crowd.wav"};
+
     for (const SimEvent &event : match_.events()) {
         switch (event.type) {
             case EventType::Hit:
+                playRandomCue(kHitCues, 3, "hit");
+                playRandomCue(kPainCues, 3, "pain");
+                break;
             case EventType::Impact:
+                // The power-up flash shares this event type (value 1 = on).
+                if (event.value < 0.5f) {
+                    playRandomCue(kEffortCues, 3, "effort");
+                } else {
+                    playRandomCue(kCrowdCues, 2, "crowd");
+                }
+                break;
             case EventType::KnockDown:
             case EventType::KnockedOut:
-                // SFX hook: Attack01.wav / Pain samples, chosen by the actor.
+                playRandomCue(kPainCues, 3, "pain");
+                break;
+            case EventType::RopeBounce:
+                playCue("audio/sfx/CrashWall.wav");
                 break;
             case EventType::Bell:
-                // SFX hook: 50_G_sys_5001_OneRingBellMatch.wav.
+                playCue("audio/sfx/50_G_sys_5001_OneRingBellMatch.wav");
                 break;
-            case EventType::Announcer:
-                // Announcer hook: RA_JR_SSN_<WRESTLER>_<take>.wav.
+            case EventType::PinStarted:
+            case EventType::RefCount:
+                playRandomCue(kCrowdCues, 2, "crowd");
                 break;
             case EventType::Victory:
-            case EventType::Lose:
+                playRandomCue(kCrowdCues, 2, "crowd");
+                break;
+            case EventType::Taunt:
+                playRandomCue(kEffortCues, 3, "effort");
                 break;
             default:
                 break;
@@ -312,7 +430,11 @@ void GameApp::render(int viewport_x, int viewport_y, int viewport_w, int viewpor
         case Scene::Match:
             renderer_.drawMatch(match_, 0.0f);
             renderer_.drawHud(match_, 0);
-            drawTouchControls();
+            if (intro_stage_ != IntroStage::Done) {
+                drawIntroBanner();
+            } else {
+                drawTouchControls();
+            }
             break;
         case Scene::Result:
             renderer_.drawMatch(match_, 0.0f);
@@ -326,65 +448,106 @@ void GameApp::render(int viewport_x, int viewport_y, int viewport_w, int viewpor
 
 void GameApp::drawTitle() {
     SpriteBatch &batch = renderer_.batch();
-    batch.draw(renderer_.white(), 0.0f, 0.0f, 960.0f, 640.0f, Color{0.05f, 0.06f, 0.10f, 1.0f});
-    renderer_.drawTextCentered("WRESTLEFEST", 480.0f, 170.0f, 2.0f, Color{1.0f, 0.82f, 0.18f, 1});
-    renderer_.drawTextCentered("ANDROID", 480.0f, 250.0f, 0.9f, Color{0.95f, 0.95f, 1.0f, 1});
-    renderer_.drawTextCentered("TAP TO START", 480.0f, 420.0f, 0.85f,
-                               Color{1.0f, 1.0f, 1.0f, 1.0f});
+    // The shipped backdrop and logo, exactly as they are in the original.
+    if (renderer_.uiBackground().valid()) {
+        batch.draw(renderer_.uiBackground(), 0.0f, 0.0f, 960.0f, 640.0f, Color{});
+    } else {
+        batch.draw(renderer_.white(), 0.0f, 0.0f, 960.0f, 640.0f,
+                   Color{0.05f, 0.06f, 0.10f, 1.0f});
+    }
+    if (renderer_.titleLogo().valid()) {
+        const float logo_w = 790.0f * 0.85f;
+        const float logo_h = 204.0f * 0.85f;
+        batch.draw(renderer_.titleLogo(), 480.0f - logo_w * 0.5f, 110.0f, logo_w, logo_h, Color{});
+    } else {
+        renderer_.drawTextCentered("WRESTLEFEST", 480.0f, 150.0f, 2.0f,
+                                   Color{1.0f, 0.82f, 0.18f, 1});
+    }
+
+    // Blinking "tap to start", 1 Hz like the original's attract loop.
+    const float pulse = 0.55f + 0.45f * std::fabs(std::sin(clock_ * 2.2f));
+    if (renderer_.tapToStart().valid()) {
+        const float w = 374.0f;
+        const float h = 47.0f;
+        batch.draw(renderer_.tapToStart(), 480.0f - w * 0.5f, 420.0f, w, h,
+                   Color{1.0f, 1.0f, 1.0f, pulse});
+    } else {
+        renderer_.drawTextCentered("TAP TO START", 480.0f, 420.0f, 0.85f,
+                                   Color{1.0f, 1.0f, 1.0f, pulse});
+    }
 
     char buffer[128];
     std::snprintf(buffer, sizeof(buffer), "%d superstars  %d moves  %d states",
                   static_cast<int>(data_.wrestlers().size()),
                   static_cast<int>(data_.moves().size()), static_cast<int>(data_.states().size()));
-    renderer_.drawTextCentered(buffer, 480.0f, 560.0f, 0.5f, Color{0.65f, 0.68f, 0.78f, 1.0f});
+    renderer_.drawTextCentered(buffer, 480.0f, 590.0f, 0.45f, Color{0.8f, 0.82f, 0.9f, 0.9f});
 }
 
 void GameApp::drawSelect() {
     SpriteBatch &batch = renderer_.batch();
-    batch.draw(renderer_.white(), 0.0f, 0.0f, 960.0f, 640.0f, Color{0.04f, 0.05f, 0.08f, 1.0f});
-    renderer_.drawTextCentered("SELECT YOUR SUPERSTAR", 480.0f, 24.0f, 0.9f,
+    if (renderer_.uiBackground().valid()) {
+        batch.draw(renderer_.uiBackground(), 0.0f, 0.0f, 960.0f, 640.0f, Color{0.7f, 0.7f, 0.75f, 1});
+    } else {
+        batch.draw(renderer_.white(), 0.0f, 0.0f, 960.0f, 640.0f, Color{0.04f, 0.05f, 0.08f, 1.0f});
+    }
+    renderer_.drawTextCentered("SELECT YOUR SUPERSTAR", 480.0f, 26.0f, 0.8f,
                                Color{1.0f, 1.0f, 1.0f, 1.0f});
 
     const int count = static_cast<int>(data_.wrestlers().size());
     if (count == 0) return;
-    const WrestlerProfile &player = data_.wrestlers()[static_cast<std::size_t>(selected_player_)];
-    const WrestlerProfile &opponent =
-        data_.wrestlers()[static_cast<std::size_t>(selected_opponent_)];
-    const WrestlerProfile &highlight = (cast_row_ == 0) ? player : opponent;
+    const int player_index = selected_player_;
+    const int opponent_index = selected_opponent_;
+    const WrestlerProfile &player = data_.wrestlers()[static_cast<std::size_t>(player_index)];
+    const WrestlerProfile &opponent = data_.wrestlers()[static_cast<std::size_t>(opponent_index)];
 
-    // Panels.
-    batch.draw(renderer_.white(), 40.0f, 90.0f, 400.0f, 300.0f,
-               cast_row_ == 0 ? Color{0.20f, 0.26f, 0.40f, 1.0f} : Color{0.10f, 0.12f, 0.18f, 1.0f});
-    batch.draw(renderer_.white(), 520.0f, 90.0f, 400.0f, 300.0f,
-               cast_row_ == 1 ? Color{0.20f, 0.26f, 0.40f, 1.0f} : Color{0.10f, 0.12f, 0.18f, 1.0f});
+    // Panels: 1P on the left, the CPU on the right, framed like the original.
+    auto panel = [&](const WrestlerProfile &profile, float center_x, bool active) {
+        if (renderer_.superstarFrame().valid()) {
+            const float size = 300.0f;
+            batch.draw(renderer_.superstarFrame(), center_x - size * 0.5f, 110.0f, size, size,
+                       active ? Color{} : Color{0.55f, 0.55f, 0.6f, 1.0f});
+        }
+        // Idle portrait inside the frame.
+        const int sst = profile.sprite_index.count("idle.sst") ? profile.sprite_index.at("idle.sst")
+                                                               : -1;
+        renderer_.drawActorPortrait(profile, sst, center_x, 380.0f, active ? 1.0f : 0.6f);
 
-    renderer_.drawTextCentered("1P", 240.0f, 100.0f, 0.6f, Color{0.75f, 0.8f, 0.9f, 1.0f});
-    renderer_.drawTextCentered("CPU", 720.0f, 100.0f, 0.6f, Color{0.75f, 0.8f, 0.9f, 1.0f});
-    renderer_.drawTextCentered(player.name, 240.0f, 180.0f, 0.72f, Color{1.0f, 0.9f, 0.6f, 1});
-    renderer_.drawTextCentered(opponent.name, 720.0f, 180.0f, 0.72f, Color{1.0f, 0.9f, 0.6f, 1});
+        renderer_.drawTextCentered(profile.name_line1, center_x, 396.0f, 0.7f,
+                                   active ? Color{1.0f, 0.92f, 0.7f, 1} : Color{0.75f, 0.75f, 0.8f, 1});
+        if (!profile.name_line2.empty()) {
+            renderer_.drawTextCentered(profile.name_line2, center_x, 424.0f, 0.5f,
+                                       Color{0.9f, 0.9f, 0.95f, 1});
+        }
+        char stats[96];
+        std::snprintf(stats, sizeof(stats), "ENERGY %d  POWER %d",
+                      static_cast<int>(profile.base.energy),
+                      static_cast<int>(profile.base.motion_power));
+        renderer_.drawTextCentered(stats, center_x, 452.0f, 0.4f, Color{0.8f, 0.85f, 0.95f, 1});
+    };
+    panel(player, 250.0f, true);
+    panel(opponent, 710.0f, false);
 
-    char stats[128];
-    std::snprintf(stats, sizeof(stats), "ENERGY %d   POWER %d", static_cast<int>(player.base.energy),
-                  static_cast<int>(player.base.motion_power));
-    renderer_.drawTextCentered(stats, 240.0f, 300.0f, 0.45f, Color{0.8f, 0.85f, 0.95f, 1});
-    std::snprintf(stats, sizeof(stats), "ENERGY %d   POWER %d",
-                  static_cast<int>(opponent.base.energy),
-                  static_cast<int>(opponent.base.motion_power));
-    renderer_.drawTextCentered(stats, 720.0f, 300.0f, 0.45f, Color{0.8f, 0.85f, 0.95f, 1});
+    // Arrows: the previous/next sprites, mirrored for the left side.
+    if (renderer_.arrowPrevious().valid()) {
+        batch.draw(renderer_.arrowPrevious(), 100.0f, 250.0f, 41.0f, 64.0f, Color{});
+        batch.draw(renderer_.arrowNext(), 816.0f, 250.0f, 41.0f, 64.0f, Color{});
+    }
+    if (renderer_.arrowNext().valid()) {
+        batch.draw(renderer_.arrowNext(), 372.0f, 250.0f, 41.0f, 64.0f, Color{});
+        batch.draw(renderer_.arrowPrevious(), 552.0f, 250.0f, 41.0f, 64.0f, Color{});
+    }
 
-    // Arrow blocks: << >> on each panel.
-    const Color arrow{0.32f, 0.38f, 0.55f, 1.0f};
-    batch.draw(renderer_.white(), 60.0f, 210.0f, 46.0f, 70.0f, arrow);
-    batch.draw(renderer_.white(), 374.0f, 210.0f, 46.0f, 70.0f, arrow);
-    batch.draw(renderer_.white(), 540.0f, 210.0f, 46.0f, 70.0f, arrow);
-    batch.draw(renderer_.white(), 854.0f, 210.0f, 46.0f, 70.0f, arrow);
-
-    batch.draw(renderer_.white(), 330.0f, 460.0f, 300.0f, 90.0f,
-               Color{0.78f, 0.14f, 0.14f, 1.0f});
-    renderer_.drawTextCentered("FIGHT", 480.0f, 484.0f, 1.15f, Color{1.0f, 1.0f, 1.0f, 1});
-    renderer_.drawTextCentered("tap a name panel to switch, FIGHT to start", 480.0f, 590.0f,
-                               0.45f, Color{0.65f, 0.7f, 0.8f, 1.0f});
-    (void)highlight;
+    // FIGHT button: the shipped button strip with text over it.
+    if (renderer_.buttonStrip().valid()) {
+        batch.draw(renderer_.buttonStrip(), 480.0f - 388.0f, 500.0f, 776.0f, 49.0f,
+                   Color{1.0f, 1.0f, 1.0f, 0.95f});
+    } else {
+        batch.draw(renderer_.white(), 330.0f, 500.0f, 300.0f, 60.0f,
+                   Color{0.78f, 0.14f, 0.14f, 1.0f});
+    }
+    renderer_.drawTextCentered("FIGHT", 480.0f, 510.0f, 0.9f, Color{1.0f, 1.0f, 1.0f, 1.0f});
+    renderer_.drawTextCentered("tap a panel to switch superstar   /   FIGHT to start", 480.0f, 590.0f,
+                               0.42f, Color{0.9f, 0.9f, 1.0f, 1.0f});
 }
 
 void GameApp::drawResult() {
@@ -404,49 +567,91 @@ void GameApp::drawResult() {
                                Color{0.9f, 0.9f, 0.95f, 1.0f});
 }
 
+void GameApp::drawIntroBanner() {
+    SpriteBatch &batch = renderer_.batch();
+    batch.draw(renderer_.white(), 0.0f, 500.0f, 960.0f, 140.0f, Color{0.0f, 0.0f, 0.0f, 0.55f});
+    const WrestlerProfile *player = nullptr;
+    const WrestlerProfile *opponent = nullptr;
+    if (!data_.wrestlers().empty()) {
+        player = &data_.wrestlers()[static_cast<std::size_t>(selected_player_)];
+        opponent = &data_.wrestlers()[static_cast<std::size_t>(selected_opponent_)];
+    }
+    switch (intro_stage_) {
+        case IntroStage::Entrance:
+            renderer_.drawTextCentered("MAKING THEIR WAY TO THE RING", 480.0f, 520.0f, 0.6f,
+                                       Color{0.9f, 0.9f, 1.0f, 1.0f});
+            break;
+        case IntroStage::AnnouncePlayer:
+            if (player != nullptr) {
+                renderer_.drawTextCentered(player->name, 480.0f, 510.0f, 1.1f,
+                                           Color{1.0f, 0.9f, 0.55f, 1.0f});
+            }
+            break;
+        case IntroStage::AnnounceOpponent:
+            if (opponent != nullptr) {
+                renderer_.drawTextCentered(opponent->name, 480.0f, 510.0f, 1.1f,
+                                           Color{1.0f, 0.9f, 0.55f, 1.0f});
+            }
+            break;
+        case IntroStage::Fight:
+            renderer_.drawTextCentered("FIGHT!", 480.0f, 500.0f, 2.0f, Color{1.0f, 0.25f, 0.2f, 1});
+            break;
+        case IntroStage::Done:
+            break;
+    }
+}
+
 void GameApp::drawTouchControls() {
     SpriteBatch &batch = renderer_.batch();
-    const Texture &stick_base = renderer_.stickBase();
-    const Texture &stick_icon = renderer_.stickIcon();
-    const Texture &red = renderer_.redButton();
-    const Texture &blue = renderer_.blueButton();
 
-    // The stick appears where the thumb landed; it falls back to its home spot.
-    float base_x = stick_.active ? stick_.start_x : kStickHomeX;
-    float base_y = stick_.active ? stick_.start_y : kStickHomeY;
-    const float size = kStickRadius * 2.0f;
-    if (stick_base.valid()) {
-        batch.draw(stick_base, base_x - size * 0.5f, base_y - size * 0.5f, size, size,
-                   Color{1.0f, 1.0f, 1.0f, 0.55f});
-    }
-    float icon_x = base_x;
-    float icon_y = base_y;
-    if (stick_.active) {
-        icon_x += stick_dir_x_ * kStickRadius * 0.55f;
-        icon_y += stick_dir_y_ * kStickRadius * 0.55f;
-    }
-    const float icon_size = 64.0f;
-    if (stick_icon.valid()) {
-        batch.draw(stick_icon, icon_x - icon_size * 0.5f, icon_y - icon_size * 0.5f, icon_size,
-                   icon_size, Color{1.0f, 1.0f, 1.0f, 0.75f});
+    // D-pad: a floating stick whose base appears wherever the thumb lands.
+    const float base_x = stick_.active ? stick_.start_x : kStickHomeX;
+    const float base_y = stick_.active ? stick_.start_y : kStickHomeY;
+    const float base_size = kStickRadius * 2.0f;
+    if (renderer_.stickBase().valid()) {
+        batch.draw(renderer_.stickBase(), base_x - base_size * 0.5f, base_y - base_size * 0.5f,
+                   base_size, base_size, Color{1.0f, 1.0f, 1.0f, 0.55f});
     } else {
-        batch.draw(renderer_.white(), icon_x - 20.0f, icon_y - 20.0f, 40.0f, 40.0f,
-                   Color{1.0f, 1.0f, 1.0f, 0.25f});
+        batch.draw(renderer_.white(), base_x - kStickRadius, base_y - kStickRadius, base_size,
+                   base_size, Color{1.0f, 1.0f, 1.0f, 0.12f});
+    }
+    float icon_x = base_x + stick_dir_x_ * kStickRadius * 0.5f;
+    float icon_y = base_y + stick_dir_y_ * kStickRadius * 0.5f;
+    if (renderer_.stickIcon().valid()) {
+        const float icon = kStickRadius * 0.78f;
+        batch.draw(renderer_.stickIcon(), icon_x - icon * 0.5f, icon_y - icon * 0.5f, icon, icon,
+                   Color{1.0f, 1.0f, 1.0f, 0.8f});
     }
 
-    const float red_size = kRedRadius * 2.0f;
-    const float blue_size = kBlueRadius * 2.0f;
-    const Color red_tint = red_down_ ? Color{1.0f, 0.55f, 0.55f, 0.95f}
-                                     : Color{1.0f, 1.0f, 1.0f, 0.6f};
-    const Color blue_tint = blue_down_ ? Color{0.55f, 0.65f, 1.0f, 0.95f}
-                                       : Color{1.0f, 1.0f, 1.0f, 0.6f};
-    if (red.valid()) {
-        batch.draw(red, kRedX - red_size * 0.5f, kRedY - red_size * 0.5f, red_size, red_size,
-                   red_tint);
-    }
-    if (blue.valid()) {
-        batch.draw(blue, kBlueX - blue_size * 0.5f, kBlueY - blue_size * 0.5f, blue_size,
-                   blue_size, blue_tint);
+    // Two buttons, red (punch) and blue (grapple), exactly like the manual page.
+    auto drawButton = [&](const Texture &base, const Texture &icon, float cx, float cy,
+                          float radius, bool down) {
+        const float size = radius * 2.0f;
+        const Color tint = down ? Color{0.75f, 0.75f, 0.75f, 1.0f} : Color{1.0f, 1.0f, 1.0f, 0.72f};
+        if (base.valid()) {
+            const float draw = down ? size * 0.94f : size;
+            batch.draw(base, cx - draw * 0.5f, cy - draw * 0.5f, draw, draw,
+                       down ? Color{1.0f, 1.0f, 1.0f, 0.95f} : tint);
+        } else {
+            batch.draw(renderer_.white(), cx - radius, cy - radius, size, size,
+                       down ? Color{1.0f, 0.3f, 0.3f, 0.8f} : Color{0.4f, 0.4f, 0.5f, 0.4f});
+        }
+        if (icon.valid()) {
+            const float icon_size = radius * 1.05f;
+            batch.draw(icon, cx - icon_size * 0.5f, cy - icon_size * 0.5f, icon_size, icon_size,
+                       Color{1.0f, 1.0f, 1.0f, 0.9f});
+        }
+    };
+    drawButton(renderer_.redButton(), renderer_.redButtonIcon(), kRedX, kRedY, kRedRadius,
+               red_down_);
+    drawButton(renderer_.blueButton(), renderer_.blueButtonIcon(), kBlueX, kBlueY, kBlueRadius,
+               blue_down_);
+
+    // Mash prompt while the player is caught in a pin.
+    const Wrestler *player = match_.wrestler(0);
+    if (player != nullptr && player->subState() == state::BE_PINNED) {
+        renderer_.drawTextCentered("MASH THE BUTTONS!", 480.0f, 250.0f, 0.8f,
+                                   Color{1.0f, 0.9f, 0.3f, 1.0f});
     }
 }
 

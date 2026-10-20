@@ -293,6 +293,35 @@ int main(int argc, char **argv) {
                     sprite->x_offset, sprite->y_offset);
     }
 
+    // ---- Referee ---------------------------------------------------------
+    {
+        SmlDocument refdoc;
+        std::vector<std::uint8_t> refbytes;
+        if (readFile(assets + "/graphics/Sprites/Character/Ref/refData.sml", &refbytes) &&
+            refdoc.parse(reinterpret_cast<const char *>(refbytes.data()), refbytes.size(), &error)) {
+            const int row = 10;  // mike_1, the standing walk pose
+            if (row < static_cast<int>(refdoc.records.size())) {
+                const SmlRecord &record = refdoc.records[static_cast<std::size_t>(row)];
+                std::vector<std::uint8_t> png;
+                Image ref_image;
+                const std::string name = record.string("name");
+                if (readFile(assets + "/graphics/Sprites/Character/Ref/" + name, &png) &&
+                    decodePng(png.data(), png.size(), &ref_image)) {
+                    const float xoff = static_cast<float>(record.number("xoffset"));
+                    const float yoff = static_cast<float>(record.number("yoffset"));
+                    const float ref_x = ring.centerX() + 40.0f;
+                    const float ref_z = 470.0f;
+                    const float w = ref_image.width * kArtScale;
+                    const float h = ref_image.height * kArtScale;
+                    canvas.blit(ref_image.rgba, ref_image.width, ref_image.height,
+                                ref_x - xoff * kArtScale, ref_z - yoff * kArtScale, w, h, false);
+                    std::printf("referee %s: %.0fx%.0f at %.1f,%.1f\n", name.c_str(), w, h,
+                                ref_x - xoff * kArtScale, ref_z - yoff * kArtScale);
+                }
+            }
+        }
+    }
+
     Image ropes;
     bytes.clear();
     if (readFile(assets + "/graphics/Sprites/Arena/ARENA02/ropes0_bottom.png", &bytes) &&

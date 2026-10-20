@@ -34,6 +34,7 @@ void Match::configure(const GameData *data, const RingGeometry &ring, int rule_i
     outside_warned_ = false;
     grapple_beat_timer_ = 0.0f;
     grapple_resolved_ = false;
+    auto_start_ = true;
     referee_.setup(data, &ring_, rule_ != nullptr ? rule_->max_referee_count : 3);
 }
 
@@ -52,6 +53,15 @@ int Match::addWrestler(const WrestlerProfile *profile, int team, float x, float 
     pending_inputs_.emplace_back();
     ai_controlled_.push_back(index != 0);  // index 0 is the human by default
     return index;
+}
+
+void Match::playEntrance() {
+    if (phase_ != MatchPhase::Intro) return;
+    for (Wrestler &w : wrestlers_) {
+        if (w.profile() == nullptr) continue;
+        w.changeState(state::ENTRANCE, 0, *this);
+    }
+    emit({EventType::Announcer, -1, -1, 0.0f, state::ENTRANCE});
 }
 
 void Match::start() {
@@ -103,7 +113,7 @@ void Match::setAiControlled(int index, bool controlled) {
 void Match::update(float dt, const std::vector<InputFrame> &inputs) {
     clock_ += dt;
 
-    if (phase_ == MatchPhase::Intro) {
+    if (phase_ == MatchPhase::Intro && auto_start_) {
         intro_timer_ += dt;
         // Entrance/FIGHT beat: ~1.6 s, then the bell.
         if (intro_timer_ >= 1.6f) start();

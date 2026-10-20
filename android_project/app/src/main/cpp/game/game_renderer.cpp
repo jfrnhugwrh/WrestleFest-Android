@@ -2,6 +2,7 @@
 
 #include "../asset_loader.h"
 #include "../render/image.h"
+#include "../data/sml_parser.h"
 #include "../render/zip_reader.h"
 
 #include <android/log.h>
@@ -51,6 +52,7 @@ bool GameRenderer::initialize(AssetLoader *assets, const GameData *data) {
     }
 
     loadUi();
+    loadReferee();
     loadArena("ARENA02");
     return true;
 }
@@ -77,6 +79,14 @@ void GameRenderer::shutdown() {
     if (virtual_stick_icon_.valid()) glDeleteTextures(1, &virtual_stick_icon_.id);
     if (button_red_.valid()) glDeleteTextures(1, &button_red_.id);
     if (button_blue_.valid()) glDeleteTextures(1, &button_blue_.id);
+    if (button_red_icon_.valid()) glDeleteTextures(1, &button_red_icon_.id);
+    if (button_blue_icon_.valid()) glDeleteTextures(1, &button_blue_icon_.id);
+    if (stick_arrows_.valid()) glDeleteTextures(1, &stick_arrows_.id);
+    for (Texture *texture : {&ui_background_, &title_logo_, &tap_to_start_, &superstar_frame_,
+                             &superstar_select_, &arrow_previous_, &arrow_next_, &arrow_point_,
+                             &button_strip_}) {
+        if (texture->valid()) glDeleteTextures(1, &texture->id);
+    }
     for (auto &bundle : bundles_) {
         for (auto &entry : bundle.second.textures) {
             if (entry.second.indices.valid()) glDeleteTextures(1, &entry.second.indices.id);
@@ -145,7 +155,55 @@ bool GameRenderer::loadUi() {
     load("graphics/Sprites/virtual_pad/joystick_icon.png", &virtual_stick_icon_);
     load("graphics/Sprites/virtual_pad/red_btn_base.png", &button_red_);
     load("graphics/Sprites/virtual_pad/blue_btn_base.png", &button_blue_);
+    load("graphics/Sprites/virtual_pad/red_btn_icon.png", &button_red_icon_);
+    load("graphics/Sprites/virtual_pad/blue_btn_icon.png", &button_blue_icon_);
+    // Directional hints around the stick come straight from the manual sheet.
+    load("ui/Sprites/UI/hint/Arrow.png", &stick_arrows_);
+
+    // Front-end.
+    load("ui/Sprites/UI/background.png", &ui_background_);
+    load("ui/Sprites/UI/title_menu/title.png", &title_logo_);
+    load("ui/Sprites/UI/title_menu/taptostart_en.png", &tap_to_start_);
+    load("ui/Sprites/UI/selector/superstar_frame.png", &superstar_frame_);
+    load("ui/Sprites/UI/selector/superstar_select.png", &superstar_select_);
+    load("ui/Sprites/UI/selector/previous.png", &arrow_previous_);
+    load("ui/Sprites/UI/selector/next.png", &arrow_next_);
+    load("ui/Sprites/UI/selector/point.png", &arrow_point_);
+    load("ui/Sprites/UI/main_menu/main_button_0.png", &button_strip_);
     return true;
+}
+
+bool GameRenderer::loadReferee() {
+    // refData.sml lists the 14 referee frames in atlas order with the anchor
+    // each sprite is drawn at (xoffset is the left edge, yoffset the height up
+    // from the feet - the same convention as wrestlerData.sml).
+    std::vector<std::uint8_t> bytes;
+    const std::string table = "graphics/Sprites/Character/Ref/refData.sml";
+    if (assets_ == nullptr || !assets_->readAsset(table, &bytes)) return false;
+    SmlDocument doc;
+    std::string error;
+    if (!doc.parse(reinterpret_cast<const char *>(bytes.data()), bytes.size(), &error)) {
+        __android_log_print(ANDROID_LOG_WARN, kLogTag, "refData.sml: %s", error.c_str());
+        return false;
+    }
+    for (const SmlRecord &record : doc.records) {
+        RefFrame frame;
+        const std::string name = record.string("name");
+        if (name.empty()) continue;
+        std::vector<std::uint8_t> png;
+        if (!assets_->readAsset("graphics/Sprites/Character/Ref/" + name, &png)) {
+            ref_frames_.push_back(frame);
+            continue;
+        }
+        Image image;
+        if (decodePng(png.data(), png.size(), &image)) {
+            frame.texture = batch_.uploadRgba(image);
+            frame.x_offset = static_cast<float>(record.number("xoffset"));
+            frame.y_offset = static_cast<float>(record.number("yoffset"));
+        }
+        ref_frames_.push_back(frame);
+    }
+    return !ref_frames_.empty();
 }
 
 void GameRenderer::begin(int viewport_x, int viewport_y, int viewport_w, int viewport_h) {
@@ -288,6 +346,74 @@ void GameRenderer::drawActor(const Wrestler &wrestler, float alpha) {
     }
 }
 
+void GameRenderer::drawActorPortrait(const WrestlerProfile &profile, int sst_id, float center_x,
+                                     float feet_y, float alpha) {
+    const SpriteEntry *sprite = profile.spriteFor(sst_id);
+    const FrameTexture *frame = frameFor(profile, sst_id);
+    if (sprite == nullptr || frame == nullptr) return;
+    const float scale = kArtScale;
+    const float width = frame->indices.width * scale;
+    const float height = frame->indices.height * scale;
+    const float left = center_x - width * 0.5f;
+    const float top = feet_y - sprite->y_offset * scale;
+    const Color tint{1.0f, 1.0f, 1.0f, alpha};
+    if (frame->palette.valid()) {
+        batch_.drawIndexed(frame->indices, frame->palette, left, top, width, height, tint);
+    } else {
+        batch_.draw(frame->indices, left, top, width, height, tint);
+    }
+}
+
+void GameRenderer::drawReferee(const Match &match) {
+    if (ref_frames_.empty()) return;
+    const Referee &ref = match.referee();
+
+    // Pick the pose: the three-finger count while pinning, a warning wave when
+    // he is chasing a wrestler out of the ring, otherwise the walk cycle.
+    // Pose selection follows the referee's sub-state: a three-finger count on a
+    // pin, "ask give up" on a submission, a warning wave when he has to get a
+    // wrestler back in the ring, and the mike_* walk cycle otherwise.
+    int frame = ref_walk_frames_[static_cast<int>(match.clock() / 0.3f) & 3];
+    switch (ref.sub()) {
+        case RefSub::PinCount:
+            frame = ref_count_frames_[std::clamp(ref.count(), 1, 3) - 1];
+            break;
+        case RefSub::GiveUp:
+            frame = ref_ask_frames_[static_cast<int>(match.clock() / 0.5f) & 1];
+            break;
+        case RefSub::TagBreak:
+            frame = ref_warn_frames_[static_cast<int>(match.clock() / 0.4f) & 1];
+            break;
+        case RefSub::MoveToPosition:
+            frame = ref_walk_frames_[static_cast<int>(match.clock() / 0.2f) & 3];
+            break;
+        case RefSub::None:
+        default:
+            if (ref.master() == RefMaster::Outside || match.outsideCount() > 0) {
+                frame = ref_warn_frames_[static_cast<int>(match.clock() / 0.5f) & 1];
+            } else if (ref.master() == RefMaster::Watch) {
+                frame = ref_judge_frames_[static_cast<int>(match.clock() / 0.6f) % 3];
+            }
+            break;
+    }
+    if (frame < 0 || frame >= static_cast<int>(ref_frames_.size())) return;
+    const RefFrame &sprite = ref_frames_[static_cast<std::size_t>(frame)];
+    if (!sprite.texture.valid()) return;
+    const float scale = kArtScale;
+    const float width = sprite.texture.width * scale;
+    const float height = sprite.texture.height * scale;
+    const float left = ref.facing >= 0.0f ? ref.x - sprite.x_offset * scale
+                                          : ref.x - (sprite.texture.width - sprite.x_offset) * scale;
+    const float top = (ref.z - ref.y) - sprite.y_offset * scale;
+    if (arena_.shadow.valid()) {
+        const float shadow_w = 96.0f * scale;
+        const float shadow_h = 26.0f * scale;
+        batch_.draw(arena_.shadow, ref.x - shadow_w * 0.5f, (ref.z - ref.y) - shadow_h * 0.62f,
+                    shadow_w, shadow_h, Color{1.0f, 1.0f, 1.0f, 0.5f});
+    }
+    batch_.draw(sprite.texture, left, top, width, height, Color{}, ref.facing < 0.0f);
+}
+
 void GameRenderer::drawMatch(const Match &match, float alpha) {
     drawArenaBackground();
 
@@ -302,7 +428,14 @@ void GameRenderer::drawMatch(const Match &match, float alpha) {
         if (a->z != b->z) return a->z < b->z;
         return a->layer < b->layer;
     });
-    for (const Wrestler *actor : actors) drawActor(*actor, alpha);
+    // The referee sorts with the actors by depth.
+    if (match.referee().z < 480.0f) {
+        drawReferee(match);
+        for (const Wrestler *actor : actors) drawActor(*actor, alpha);
+    } else {
+        for (const Wrestler *actor : actors) drawActor(*actor, alpha);
+        drawReferee(match);
+    }
 
     drawArenaFront();
 }

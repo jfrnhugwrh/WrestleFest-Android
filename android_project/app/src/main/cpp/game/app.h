@@ -17,6 +17,8 @@
 #include <string>
 #include <vector>
 
+class AudioPlayer;  // OpenSL ES mixer (global namespace, see audio_player.h)
+
 namespace wrestlefest {
 
 // AssetSource over the APK/OBB loader so GameData can read the .sml tables.
@@ -45,7 +47,7 @@ struct TouchPoint {
 
 class GameApp {
 public:
-    bool initialize(AssetLoader *assets);
+    bool initialize(AssetLoader *assets, AudioPlayer *audio);
     void shutdown();
 
     // Called once per frame with the elapsed time; runs the fixed-step sim.
@@ -68,8 +70,14 @@ private:
     void drawSelect();
     void drawResult();
     void drawTouchControls();
+    void updateIntro(float dt);
+    void drawIntroBanner();
+
+    void playCue(const char *asset);
+    void playRandomCue(const char *const *paths, int count, const char *tag);
 
     AssetLoader *assets_ = nullptr;
+    AudioPlayer *audio_ = nullptr;
     LoaderAssetSource source_{nullptr};
     GameData data_;
     GameRenderer renderer_;
@@ -77,13 +85,25 @@ private:
     std::unique_ptr<AiEntity> dummy_ai_;
     std::vector<InputFrame> inputs_;
 
+    // Pre-match staging (GAMEPLAY_IMPLEMENTATION 4.3): entrance -> announcer
+    // for each wrestler -> bell / "FIGHT".
+    enum class IntroStage {
+        Entrance,
+        AnnouncePlayer,
+        AnnounceOpponent,
+        Fight,
+        Done,
+    };
+    IntroStage intro_stage_ = IntroStage::Entrance;
+    float intro_timer_ = 0.0f;
+    float intro_stage_length_ = 0.0f;
+
     Scene scene_ = Scene::Loading;
     bool ready_ = false;
     std::string error_;
 
     int selected_player_ = 0;
     int selected_opponent_ = 1;
-    int cast_row_ = 0;
 
     double accumulator_ = 0.0;
     float clock_ = 0.0f;

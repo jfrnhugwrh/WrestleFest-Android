@@ -6,10 +6,12 @@
 // No GPU is involved: this exercises everything up to (but not including) the
 // glTexImage2D calls in gl_sprite.cpp.
 
+#include "../data/game_data.h"
 #include "../data/sml_parser.h"
 #include "image.h"
 #include "zip_reader.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -216,6 +218,60 @@ void testFontAtlas(const std::string &assets) {
     check(ink(' ', false) == 0, "the space glyph has no ink");
 }
 
+// Every animation frame of every wrestler must resolve to a sprite that really
+// exists in that wrestler's bundle. This is the contract between the SML tables
+// and the art: 269 animations x up to 24 frames x 38 wrestlers.
+void testFrameCoverage(const std::string &assets) {
+    std::printf("[frame coverage]\n");
+    DirectoryAssetSource source(assets + "/data/Data");
+    GameData data;
+    std::string error;
+    if (!data.load(&source, "", &error)) {
+        std::printf("  FAIL data load: %s\n", error.c_str());
+        ++g_failures;
+        return;
+    }
+
+    int checked = 0;
+    int missing = 0;
+    int bundles = 0;
+    for (const WrestlerProfile &profile : data.wrestlers()) {
+        std::vector<std::uint8_t> zip_bytes;
+        const std::string path =
+            assets + "/asset_bundles/Sprites/Character/" + profile.folder + "/wrestler.zip";
+        if (!readFile(path, &zip_bytes)) {
+            std::printf("  FAIL missing bundle for %s\n", profile.folder.c_str());
+            ++g_failures;
+            continue;
+        }
+        ZipArchive archive;
+        if (!archive.open(zip_bytes.data(), zip_bytes.size())) {
+            std::printf("  FAIL unreadable bundle for %s\n", profile.folder.c_str());
+            ++g_failures;
+            continue;
+        }
+        ++bundles;
+        for (const AnimInfo &anim : data.anims()) {
+            const int frames = std::min(anim.frame_count, 24);
+            for (int i = 0; i < frames; ++i) {
+                const int sprite_id = anim.frames[static_cast<std::size_t>(i)];
+                if (sprite_id < 0) continue;
+                const SpriteEntry *sprite = profile.spriteFor(sprite_id);
+                if (sprite == nullptr || sprite->name.empty() ||
+                    archive.find(sprite->name) == nullptr) {
+                    ++missing;
+                }
+                ++checked;
+            }
+        }
+    }
+    std::printf("  info %d frames over %d bundles\n", checked, bundles);
+    check(bundles == static_cast<int>(data.wrestlers().size()),
+          "every wrestler has a sprite bundle");
+    check(checked > 100000, "the animation table references over 100k frames");
+    check(missing == 0, "every animation frame resolves to a sprite in its bundle");
+}
+
 }  // namespace
 
 int main(int argc, char **argv) {
@@ -223,6 +279,7 @@ int main(int argc, char **argv) {
     testPng(assets);
     testSst(assets);
     testFontAtlas(assets);
+    testFrameCoverage(assets);
 
     if (g_failures == 0) {
         std::printf("\nimage_test: PASS\n");

@@ -39,8 +39,17 @@ public:
     // Adds a wrestler; returns its index. Teams are 0/1 (0xff = neutral).
     int addWrestler(const WrestlerProfile *profile, int team, float x, float z, float facing);
 
-    // Starts the match (bell). Until then the sim only runs the entrance idle.
+    // Starts the match (bell). Until then the sim only runs the entrance.
     void start();
+
+    // Entrance staging: puts every wrestler into ENTRANCE (105). The flow layer
+    // holds the match in MatchPhase::Intro until it calls start().
+    void playEntrance();
+
+    // When true (default) Match rings the bell itself after a short intro beat.
+    // The screen flow disables it and calls start() when its own entrance and
+    // announcer beats are done.
+    void allowAutoStart(bool allow) { auto_start_ = allow; }
 
     // One fixed step. `inputs` is indexed like wrestlers(); missing entries are
     // treated as neutral input.
@@ -109,6 +118,7 @@ private:
     float grapple_beat_timer_ = 0.0f;
     float pin_cooldown_ = 0.0f;
     bool grapple_resolved_ = false;
+    bool auto_start_ = true;
 
     // AI: one entity per wrestler, index-aligned. Entity 0 is the human unless
     // setAiControlled() is called for it.

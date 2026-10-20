@@ -166,6 +166,12 @@ private:
     void updatePowerUp(float dt, Match &match, bool can_power_up);
     void moveInput(float dt, const InputFrame &input);
 
+    // CollisionRangeX for a state, straight from StateTable.sml. A negative row
+    // means the state does not collide; `fallback` is used only in that case.
+    float collisionRange(int state_id, float fallback) const;
+    // The xOffset of the animation a state entry plays (paired-animation snap).
+    float stateSnapOffset(int state_id, float fallback) const;
+
     const WrestlerProfile *profile_ = nullptr;
     const GameData *data_ = nullptr;
     const RingGeometry *ring_ = nullptr;

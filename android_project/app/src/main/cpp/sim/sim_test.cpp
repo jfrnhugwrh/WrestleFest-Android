@@ -139,6 +139,34 @@ int main(int argc, char **argv) {
     }
 
     // ------------------------------------------------------------------
+    std::printf("[entrance staging]\n");
+    {
+        Match match;
+        match.configure(&data, ring, 0, 0x77u);
+        match.addWrestler(data.wrestlerByFolder("00_John Cena"), 0, ring.centerX() - 100.0f,
+                          ring.centerZ(), 1.0f);
+        match.addWrestler(data.wrestlerByFolder("03_BigShow"), 1, ring.centerX() + 100.0f,
+                          ring.centerZ(), -1.0f);
+        std::vector<InputFrame> inputs(2);
+        match.allowAutoStart(false);
+        match.playEntrance();
+        for (int i = 0; i < 60; ++i) match.update(1.0f / 60.0f, inputs);
+        check(match.wrestler(0)->subState() == state::ENTRANCE, "entrance holds the wrestler");
+        check(match.phase() == MatchPhase::Intro, "no bell before start()");
+        match.start();
+        check(match.phase() == MatchPhase::Running, "start() rings the bell");
+        check(match.wrestler(0)->subState() == state::IDLE, "wrestlers go to IDLE on the bell");
+
+        // The announced names come from each wrestler's SFXTable.
+        const WrestlerProfile *cena = data.wrestlerByFolder("00_John Cena");
+        check(cena != nullptr && cena->introCue() != nullptr &&
+                  cena->introCue()->file_name == "RA_JR_SSN_JOHNCENA_0.wav",
+              "Cena's announcer cue comes from his SFXTable");
+        check(cena != nullptr && !cena->entrance.anims.empty(),
+              "EntranceInfo lists animation ids");
+    }
+
+    // ------------------------------------------------------------------
     std::printf("[collision]\n");
     {
         check(canReach(400.0f, 450.0f, 1.0f, 500.0f, 450.0f, 110.0f, 40.0f, true),

@@ -39,7 +39,7 @@ if ! echo 'int main(){return 0;}' | $CXX -x c++ - -o "$OUT/zprobe" -lz 2>/dev/nu
 fi
 $CXX $COMMON $ZFLAGS -DWRESTLEFEST_ASSET_ROOT="\"$ASSETS\"" \
     "$SRC"/render/image.cpp "$SRC"/render/zip_reader.cpp "$SRC"/render/image_test.cpp \
-    "$SRC"/data/sml_parser.cpp \
+    $DATA_SRC \
     -o "$OUT/image_test" $ZLIB
 "$OUT/image_test"
 

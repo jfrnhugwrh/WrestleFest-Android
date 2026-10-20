@@ -213,7 +213,7 @@ bool Wrestler::loopsAnimation() const {
            s == state::GRAPPLE_HIGH || s == state::GRAPPLE_LOW || s == state::HEADLOCK ||
            s == state::HEADLOCKED || s == state::DOGFIGHT_STANDS || s == state::DOGFIGHT_HIGHER ||
            s == state::DOGFIGHT_LOWER || s == state::PINNING || s == state::BE_PINNED ||
-           s == state::VICTORY || s == state::LOSE;
+           s == state::VICTORY || s == state::LOSE || s == state::ENTRANCE;
 }
 
 void Wrestler::advanceAnimation(float dt) {
@@ -425,6 +425,22 @@ void Wrestler::tickLocomotion(float dt, Match &match, const InputFrame &input) {
     }
 }
 
+float Wrestler::collisionRange(int state_id, float fallback) const {
+    if (data_ == nullptr) return fallback;
+    const StateInfo *info = data_->stateInfo(state_id);
+    if (info == nullptr || info->collision_range_x < 0.0f) return fallback;
+    return info->collision_range_x;
+}
+
+float Wrestler::stateSnapOffset(int state_id, float fallback) const {
+    if (data_ == nullptr) return fallback;
+    const StateInfo *info = data_->stateInfo(state_id);
+    if (info == nullptr || info->anim_id < 0) return fallback;
+    const AnimInfo *anim = data_->animInfo(info->anim_id);
+    if (anim == nullptr || anim->x_offset == 0.0f) return fallback;
+    return anim->x_offset;
+}
+
 void Wrestler::tryStartAttack(Match &match, const InputFrame &input) {
     Wrestler *other = match.wrestler(opponent_);
     if (profile_ == nullptr || other == nullptr || play_dead) return;
@@ -436,14 +452,17 @@ void Wrestler::tryStartAttack(Match &match, const InputFrame &input) {
     // Direction + attack = grapple. The status slot decides what is available
     // (0 running attack, 1 throw, 3 ground attack).
     const bool grappling = input.dirX() != 0 || input.dirZ() != 0;
+    const float grapple_range = collisionRange(state::GRAPPLE_IDLE, 100.0f);
     if (grappling && !opponent_down && !other->isBusy() &&
-        canReach(x, z, facing, other->x, other->z, 100.0f, range_z, true)) {
+        canReach(x, z, facing, other->x, other->z, grapple_range, range_z, true)) {
         startGrapple(match, input.dirZ() != 0);  // up/down = high/low grapple
         return;
     }
 
     // Ground attack when the opponent is down (uses the ground move slot 3).
-    if (opponent_down && canReach(x, z, facing, other->x, other->z, 100.0f, range_z, true)) {
+    const float ground_range = collisionRange(state::USE_F_WS, grapple_range);
+    if (opponent_down &&
+        canReach(x, z, facing, other->x, other->z, ground_range, range_z, true)) {
         const StatusSlot &slot = profile_->status[3];
         for (int i = 0; i < slot.list_count && i < 4; ++i) {
             const int id = slot.attack[static_cast<std::size_t>(i)];
@@ -467,7 +486,8 @@ void Wrestler::tryStartAttack(Match &match, const InputFrame &input) {
             const MoveInfo *move = data_->moveInfo(id);
             if (move == nullptr) continue;
             if (move->energy_damage <= 0) continue;
-            if (!canReach(x, z, facing, other->x, other->z, 120.0f, range_z, true)) return;
+            const float run_range = collisionRange(state::RUN, grapple_range + 20.0f);
+            if (!canReach(x, z, facing, other->x, other->z, run_range, range_z, true)) return;
             beginMove(id);
             useWrestleStyle(*move, match);
             return;
@@ -495,8 +515,9 @@ void Wrestler::startGrapple(Match &match, bool high) {
     if (other != nullptr) {
         other->facing = -facing;
         other->opponent_ = id_;
-        // Snap the pair together so the grapple animations line up.
-        other->x = x + facing * 120.0f;
+        // Snap the pair together so the grapple animations line up, using the
+        // grapple animation's own xOffset (the engine's AdjustOpponentXZ).
+        other->x = x + facing * stateSnapOffset(state::GRAPPLE_IDLE, 120.0f);
         other->z = z;
         if (high) changeState(state::GRAPPLE_HIGH, 1, match);
     }
@@ -520,12 +541,13 @@ void Wrestler::tickStrike(float dt, Match &match) {
         move_hit_applied = true;
         Wrestler *other = match.wrestler(opponent_);
         const float range_z = match.common().collision_range_z;
-        if (other != nullptr && !other->isDead() &&
-            canReach(x, z, facing, other->x, other->z, 110.0f, range_z, true)) {
-            const MoveInfo *move = data_ != nullptr ? data_->moveInfo(move_id) : nullptr;
-            const float energy_damage = move != nullptr ? static_cast<float>(move->energy_damage) : 2.0f;
-            const float motion_damage =
-                move != nullptr ? static_cast<float>(move->motion_damage) : 0.0f;
+        const float strike_range = collisionRange(subState(), 110.0f);
+        const MoveInfo *move = data_ != nullptr ? data_->moveInfo(move_id) : nullptr;
+        if (other != nullptr && move != nullptr && !other->isDead() &&
+            canReach(x, z, facing, other->x, other->z, strike_range, range_z, true)) {
+            // Damage is the (energy, motion) pair from WrestleStyleList.
+            const float energy_damage = static_cast<float>(move->energy_damage);
+            const float motion_damage = static_cast<float>(move->motion_damage);
             other->applyDamage(energy_damage, motion_damage);
             other->facing = -facing;
             other->changeState(subState() == state::KICK ? state::HITREACT_HIGH : state::HITREACT_MID,

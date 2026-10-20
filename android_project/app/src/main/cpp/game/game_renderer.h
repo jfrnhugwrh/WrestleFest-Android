@@ -39,6 +39,13 @@ public:
     void end();
 
     void drawArenaBackground();
+    // The man in stripes. Same anchoring rule as the wrestlers, but his frames
+    // are plain PNGs described by graphics/Sprites/Character/Ref/refData.sml.
+    void drawReferee(const Match &match);
+    // Draws one animation frame of a wrestler at an arbitrary spot - used by the
+    // select screen for the idle portrait inside the frame.
+    void drawActorPortrait(const WrestlerProfile &profile, int sst_id, float center_x,
+                           float feet_y, float alpha);
     void drawMatch(const Match &match, float alpha);
     void drawActor(const Wrestler &wrestler, float alpha);
     void drawArenaFront();
@@ -49,10 +56,23 @@ public:
 
     // Assets the app shell draws itself (virtual pad, plain fills).
     const Texture &white() const { return white_; }
+    // Front-end art (title / select / pause).
+    const Texture &uiBackground() const { return ui_background_; }
+    const Texture &titleLogo() const { return title_logo_; }
+    const Texture &tapToStart() const { return tap_to_start_; }
+    const Texture &superstarFrame() const { return superstar_frame_; }
+    const Texture &superstarSelect() const { return superstar_select_; }
+    const Texture &arrowPrevious() const { return arrow_previous_; }
+    const Texture &arrowNext() const { return arrow_next_; }
+    const Texture &arrowPoint() const { return arrow_point_; }
+    const Texture &buttonStrip() const { return button_strip_; }
+
     const Texture &stickBase() const { return virtual_stick_base_; }
     const Texture &stickIcon() const { return virtual_stick_icon_; }
     const Texture &redButton() const { return button_red_; }
     const Texture &blueButton() const { return button_blue_; }
+    const Texture &redButtonIcon() const { return button_red_icon_; }
+    const Texture &blueButtonIcon() const { return button_blue_icon_; }
 
     // Convenience for the menu screens.
     void drawText(const std::string &text, float x, float y, float scale, const Color &color);
@@ -78,6 +98,7 @@ private:
 
     bool loadArena(const std::string &folder);
     bool loadUi();
+    bool loadReferee();
     // Fetches (and caches) one animation frame of a wrestler bundle.
     const FrameTexture *frameFor(const WrestlerProfile &profile, int sst_id);
     void drawEnergyBar(const EnergyBarAssets &assets, const Wrestler &wrestler, float x,
@@ -93,15 +114,41 @@ private:
     EnergyBarAssets energy_single_;  // UI_energy01_* (1 vs 1)
     EnergyBarAssets energy_pair_;    // UI_energy02_* (2 vs 2)
     EnergyBarAssets energy_multi_;   // UI_energy03_* (rumble)
+    Texture ui_background_;
+    Texture title_logo_;
+    Texture tap_to_start_;
+    Texture superstar_frame_;
+    Texture superstar_select_;
+    Texture arrow_previous_;
+    Texture arrow_next_;
+    Texture arrow_point_;
+    Texture button_strip_;
     Texture label_1p_;
     Texture label_2p_;
     Texture ref_count_[10];
     Texture ref_middle_;
     Texture ref_infinite_;
+    // Referee (PNG frames, no palette)
+    struct RefFrame {
+        Texture texture;
+        float x_offset = 0.0f;
+        float y_offset = 0.0f;
+    };
+    std::vector<RefFrame> ref_frames_;  // in refData.sml order
+    // Indices into ref_frames_ (refData.sml row order).
+    int ref_walk_frames_[4] = {10, 11, 12, 13};  // mike_1..4
+    int ref_count_frames_[3] = {7, 8, 9};        // countdown (1..3)
+    int ref_warn_frames_[2] = {5, 6};            // Warn (1..2)
+    int ref_judge_frames_[3] = {2, 3, 4};        // Judgment (1..3)
+    int ref_ask_frames_[2] = {0, 1};             // Ask give up (1..2)
+
     Texture virtual_stick_base_;
     Texture virtual_stick_icon_;
     Texture button_red_;
     Texture button_blue_;
+    Texture button_red_icon_;    // icon drawn on top of the red button
+    Texture button_blue_icon_;
+    Texture stick_arrows_;
     Texture white_;
 
     struct BundleCache {

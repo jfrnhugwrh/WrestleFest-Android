@@ -99,7 +99,7 @@ if(VIEWPORT_BUILD_TESTS)
     # GlSprite needs GLES3 headers, so the decoders are built straight into the
     # test instead of pulling in the renderer library.
     add_executable(image_test render/image_test.cpp render/image.cpp render/zip_reader.cpp
-        data/sml_parser.cpp)
+        data/asset_source.cpp data/game_data.cpp data/sml_parser.cpp)
     target_link_libraries(image_test PRIVATE z)
     include(CheckIncludeFileCXX)
     check_include_file_cxx("zlib.h" HAVE_ZLIB_H)
