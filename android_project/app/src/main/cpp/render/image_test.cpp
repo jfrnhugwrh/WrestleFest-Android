@@ -167,6 +167,27 @@ void testSst(const std::string &assets) {
     check(failures == 0, "no undecodable frames");
 
     check(!archive.read("this_frame_does_not_exist.sst", &sst_bytes), "missing frame rejected");
+
+    // Streaming path: exactly what the renderer does on device, where the 5 MB
+    // archive is never held in memory. The reader here serves ranges out of the
+    // file we already loaded, and every frame must decode the same way.
+    ZipArchive streamed;
+    auto range = [&zip_bytes](std::size_t offset, std::size_t length, std::uint8_t *destination) {
+        if (offset + length > zip_bytes.size()) return false;
+        std::memcpy(destination, zip_bytes.data() + offset, length);
+        return true;
+    };
+    check(streamed.openStreaming(zip_bytes.size(), range), "central directory streams");
+    check(streamed.entries().size() == archive.entries().size(),
+          "streamed directory lists the same entries");
+    std::vector<std::uint8_t> streamed_frame;
+    const ZipEntry *idle_entry = streamed.find("idle.sst");
+    check(idle_entry != nullptr && streamed.readStreaming(*idle_entry, &streamed_frame),
+          "a frame streams out of the archive");
+    SstSprite streamed_sprite;
+    check(decodeSst(streamed_frame.data(), streamed_frame.size(), &streamed_sprite),
+          "the streamed frame decodes");
+    check(streamed_sprite.indices == sprite.indices, "streamed pixels match the in-memory read");
 }
 
 // The tyF glyph rectangles are normalised UVs into the atlas. Checking that a

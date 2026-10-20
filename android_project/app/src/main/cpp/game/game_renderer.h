@@ -7,14 +7,14 @@
 // everything here reads actor state and turns it into sprites. Coordinates are
 // the logical 960x640 canvas, so the numbers line up with the SML tables.
 
+#include "../asset_loader.h"  // RangeReader for streaming the bundle zips
 #include "../render/gl_sprite.h"
+#include "../render/zip_reader.h"
 #include "../sim/match.h"
 
 #include <string>
 #include <unordered_map>
 #include <vector>
-
-class AssetLoader;
 
 namespace wrestlefest {
 
@@ -151,14 +151,19 @@ private:
     Texture stick_arrows_;
     Texture white_;
 
+    // A wrestler bundle is ~5 MB of .sst frames, so it is opened once and then
+    // read on demand: the central directory is parsed from the first 64 KB and
+    // individual frames are fetched with a byte-range read instead of keeping
+    // the whole archive (and every decoded frame) resident.
     struct BundleCache {
         std::string folder;
-        // The whole wrestler.zip, kept so single frames can be pulled out by
-        // name later (AssetLoader only reads whole assets).
-        std::vector<std::uint8_t> zip;
+        ZipArchive archive;
+        AssetLoader::RangeReader reader;  // byte-range access to the bundle file
         bool loaded = false;
+        bool failed = false;
         std::unordered_map<std::string, FrameTexture> textures;
     };
+    bool openBundle(BundleCache *cache, const std::string &folder);
     std::unordered_map<std::string, BundleCache> bundles_;
     std::size_t texture_budget_ = 0;
 

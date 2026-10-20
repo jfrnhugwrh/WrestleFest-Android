@@ -235,38 +235,51 @@ void GameRenderer::drawArenaFront() {
     batch_.draw(arena_.ropes_front, x, y, width, height, Color{});
 }
 
+bool GameRenderer::openBundle(BundleCache *cache, const std::string &folder) {
+    if (cache->loaded) return !cache->failed;
+    cache->loaded = true;
+    cache->folder = folder;
+    const std::string path = "asset_bundles/Sprites/Character/" + folder + "/wrestler.zip";
+    if (assets_ == nullptr) {
+        cache->failed = true;
+        return false;
+    }
+    const std::uint64_t size = assets_->assetSize(path);
+    std::vector<std::uint8_t> ignored;
+    if (size == 0 || !assets_->openAssetRange(path, 1, &ignored, &cache->reader)) {
+        __android_log_print(ANDROID_LOG_ERROR, kLogTag, "missing bundle %s", path.c_str());
+        cache->failed = true;
+        return false;
+    }
+    // The archive is never held in memory: the central directory is read from
+    // the end and each frame is fetched with a byte-range read.
+    BundleCache *target = cache;
+    auto reader = [target](std::size_t offset, std::size_t length, std::uint8_t *destination) {
+        return target->reader && target->reader(offset, length, destination);
+    };
+    if (!cache->archive.openStreaming(static_cast<std::size_t>(size), reader)) {
+        __android_log_print(ANDROID_LOG_ERROR, kLogTag, "bad zip %s", path.c_str());
+        cache->failed = true;
+        return false;
+    }
+    return true;
+}
+
 const GameRenderer::FrameTexture *GameRenderer::frameFor(const WrestlerProfile &profile, int sst_id) {
     const SpriteEntry *sprite = profile.spriteFor(sst_id);
     if (sprite == nullptr || sprite->name.empty()) return nullptr;
 
     BundleCache &cache = bundles_[profile.folder];
+    if (!openBundle(&cache, profile.folder)) return nullptr;
+
     auto cached = cache.textures.find(sprite->name);
     if (cached != cache.textures.end()) return cached->second.valid ? &cached->second : nullptr;
 
-    if (!cache.loaded) {
-        // First use: read the whole bundle once and keep it, since the frames
-        // live inside the archive.
-        cache.loaded = true;
-        const std::string path =
-            "asset_bundles/Sprites/Character/" + profile.folder + "/wrestler.zip";
-        if (assets_ == nullptr || !assets_->readAsset(path, &cache.zip)) {
-            __android_log_print(ANDROID_LOG_ERROR, kLogTag, "missing bundle %s", path.c_str());
-            return nullptr;
-        }
-        ZipArchive probe;
-        if (!probe.open(cache.zip.data(), cache.zip.size())) {
-            __android_log_print(ANDROID_LOG_ERROR, kLogTag, "bad zip %s", path.c_str());
-            cache.zip.clear();
-            return nullptr;
-        }
-    }
-    if (cache.zip.empty()) return nullptr;
-
-    ZipArchive archive;
-    if (!archive.open(cache.zip.data(), cache.zip.size())) return nullptr;
+    const ZipEntry *entry = cache.archive.find(sprite->name);
     std::vector<std::uint8_t> sst_bytes;
-    if (!archive.read(sprite->name, &sst_bytes)) {
-        __android_log_print(ANDROID_LOG_WARN, kLogTag, "missing frame %s", sprite->name.c_str());
+    if (entry == nullptr || !cache.archive.readStreaming(*entry, &sst_bytes)) {
+        __android_log_print(ANDROID_LOG_WARN, kLogTag, "missing frame %s in %s",
+                            sprite->name.c_str(), profile.folder.c_str());
         cache.textures[sprite->name] = FrameTexture{};
         return nullptr;
     }
@@ -290,9 +303,9 @@ const GameRenderer::FrameTexture *GameRenderer::frameFor(const WrestlerProfile &
     }
     // Keep the texture cache bounded (a match touches a few hundred frames).
     if (cache.textures.size() > 420) {
-        for (auto &entry : cache.textures) {
-            if (entry.second.indices.valid()) glDeleteTextures(1, &entry.second.indices.id);
-            if (entry.second.palette.valid()) glDeleteTextures(1, &entry.second.palette.id);
+        for (auto &entry_it : cache.textures) {
+            if (entry_it.second.indices.valid()) glDeleteTextures(1, &entry_it.second.indices.id);
+            if (entry_it.second.palette.valid()) glDeleteTextures(1, &entry_it.second.palette.id);
         }
         cache.textures.clear();
     }

@@ -9,6 +9,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <cstdio>
+#include <memory>
 #include <vector>
 
 namespace
@@ -210,6 +212,93 @@ bool AssetLoader::hasAsset(const std::string &path) const
             AAsset_close(asset);
             return true;
         }
+    }
+    return false;
+}
+
+std::uint64_t AssetLoader::assetSize(const std::string &path) const
+{
+    if (obb_.isOpen() && obb_.hasEntry(path))
+    {
+        return obb_.entrySize(path);
+    }
+    if (assets_ != nullptr)
+    {
+        AAsset *asset = AAssetManager_open(assets_, path.c_str(), AASSET_MODE_UNKNOWN);
+        if (asset != nullptr)
+        {
+            const off64_t length = AAsset_getLength64(asset);
+            AAsset_close(asset);
+            return length > 0 ? static_cast<std::uint64_t>(length) : 0;
+        }
+    }
+    return 0;
+}
+
+bool AssetLoader::openAssetRange(const std::string &path, std::size_t header_size,
+                                 std::vector<std::uint8_t> *header, RangeReader *reader) const
+{
+    if (header == nullptr || reader == nullptr)
+    {
+        return false;
+    }
+
+    if (obb_.isOpen() && obb_.hasEntry(path))
+    {
+        // The OBB is a plain file on disk, so reads can seek.
+        const std::string file_path = obb_.getPath();
+        const std::uint64_t size = obb_.entrySize(path);
+        if (size == 0)
+        {
+            return false;
+        }
+        header->assign(header_size < size ? header_size : static_cast<std::size_t>(size), 0);
+        auto read_range = [file_path](std::size_t offset, std::size_t length,
+                                      std::uint8_t *destination) {
+            std::FILE *file = std::fopen(file_path.c_str(), "rb");
+            if (file == nullptr)
+            {
+                return false;
+            }
+            const bool ok = std::fseek(file, static_cast<long>(offset), SEEK_SET) == 0 &&
+                            std::fread(destination, 1, length, file) == length;
+            std::fclose(file);
+            return ok;
+        };
+        if (!obb_.readRange(path, 0, header->size(), header->data()))
+        {
+            return false;
+        }
+        *reader = read_range;
+        return true;
+    }
+
+    if (assets_ != nullptr)
+    {
+        AAsset *asset = AAssetManager_open(assets_, path.c_str(), AASSET_MODE_RANDOM);
+        if (asset == nullptr)
+        {
+            return false;
+        }
+        // Keep the AAsset alive for the lifetime of the reader by copying it into
+        // the closure; AAssetManager assets support seeking.
+        header->assign(header_size, 0);
+        const int count = AAsset_read(asset, header->data(), header->size());
+        if (count < 0 || static_cast<std::size_t>(count) != header->size())
+        {
+            AAsset_close(asset);
+            return false;
+        }
+        std::shared_ptr<AAsset> handle(asset, [](AAsset *a) { AAsset_close(a); });
+        *reader = [handle](std::size_t offset, std::size_t length, std::uint8_t *destination) {
+            if (AAsset_seek64(handle.get(), static_cast<off64_t>(offset), SEEK_SET) < 0)
+            {
+                return false;
+            }
+            const int read = AAsset_read(handle.get(), destination, length);
+            return read >= 0 && static_cast<std::size_t>(read) == length;
+        };
+        return true;
     }
     return false;
 }
