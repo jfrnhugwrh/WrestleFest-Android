@@ -22,7 +22,6 @@ inline float GameActivityPointerAxes_getAxisValue(GameActivityPointerAxes *point
 
 struct GameActivityMotionEvent {
     std::int32_t action;
-    std::uint32_t actionIndex;
     std::uint32_t pointerCount;
     GameActivityPointerAxes pointers[GAMEACTIVITY_MAX_NUM_POINTERS_IN_MOTION_EVENT];
 };

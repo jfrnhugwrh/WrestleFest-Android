@@ -123,6 +123,8 @@ bool readAsset(AAssetManager* assets, const std::string& path,
     return true;
 }
 
+}  // namespace
+
 AudioPlayer::~AudioPlayer() {
     shutdown();
 }
