@@ -383,6 +383,63 @@ int main(int argc, char **argv) {
     }
 
     // ------------------------------------------------------------------
+    std::printf("[exhaustion]\n");
+    {
+        // A wrestler with an empty bar is out: the Rumble cannot pin him, so
+        // without this rule an exhausted man sits in STAND_TIRED forever and
+        // the match never ends.
+        Match match;
+        match.configure(&data, ring, 2, 0x99u);
+        match.addWrestler(data.wrestlerByFolder("00_John Cena"), 0, ring.centerX() - 100.0f,
+                          ring.centerZ(), 1.0f);
+        match.addWrestler(data.wrestlerByFolder("05_Kane"), 1, ring.centerX() + 100.0f,
+                          ring.centerZ(), -1.0f);
+        match.setAiControlled(0, true);
+        match.setAiControlled(1, true);
+        match.start();
+        match.wrestler(0)->energy = 0.0f;
+        std::vector<InputFrame> idle(2);
+        match.update(1.0f / 60.0f, idle);
+        check(match.wrestler(0)->isDead(), "an exhausted wrestler is knocked out");
+        check(match.phase() == MatchPhase::Finished && match.winnerTeam() == 1,
+              "the exhausted wrestler loses the match");
+    }
+
+    // ------------------------------------------------------------------
+    std::printf("[rumble plays out]\n");
+    {
+        // End to end: six entrant Rumble, staggered entries, AI only. It has to
+        // reach a winner on its own, which is the regression guard for the
+        // exhausted-wrestler stall.
+        Match match;
+        match.configure(&data, ring, 2, 0x777u);
+        match.allowAutoStart(false);
+        const char *const folders[6] = {"00_John Cena",   "03_BigShow", "05_Kane",
+                                        "06_Bartista",    "01_TripleH", "00_Randy Orton"};
+        for (int i = 0; i < 6; ++i) {
+            match.addWrestler(data.wrestlerByFolder(folders[i]), i,
+                              ring.centerX() - 100.0f + 40.0f * i, ring.centerZ(), 1.0f);
+        }
+        for (int i = 0; i < 6; ++i) match.setAiControlled(i, true);
+        match.enableStaggeredEntry(25.0f, 2);
+        match.start();
+        std::vector<InputFrame> idle(6);
+        float seconds = 0.0f;
+        while (match.phase() != MatchPhase::Finished && seconds < 900.0f) {
+            match.update(1.0f / 60.0f, idle);
+            match.clearEvents();
+            seconds += 1.0f / 60.0f;
+        }
+        std::printf("  info the rumble took %.0fs\n", seconds);
+        check(match.phase() == MatchPhase::Finished, "the rumble reaches a winner on its own");
+        int standing = 0;
+        for (int i = 0; i < 6; ++i) {
+            if (!match.wrestler(i)->isDead()) ++standing;
+        }
+        check(standing == 1, "one man is left standing");
+    }
+
+    // ------------------------------------------------------------------
     std::printf("[tag team]\n");
     {
         // Rule 1 (2 VS 2): one man per team in the ring, the partner on the

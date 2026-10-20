@@ -127,6 +127,10 @@ private:
     // Paired moves keep the opponent they started with.
     void updateOpponents();
     void updateRumbleEntries(float dt);
+    // A wrestler who is out of energy is out of the match. Without this an
+    // exhausted wrestler can sit in STAND_TIRED with an empty bar forever (a
+    // Rumble cannot pin him out, so the match would never end).
+    void checkExhausted();
     // Moves every entrant past the starting pair to the aisle (no-op unless the
     // Rumble rule and staggered entry are both active).
     void parkLateEntrants();

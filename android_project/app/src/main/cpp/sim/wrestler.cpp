@@ -637,19 +637,11 @@ void Wrestler::tickGrapple(float dt, Match &match, const InputFrame &input) {
 
     const int s = subState();
     if (s == state::GRAPPLE_IDLE) {
-        // The human wins by pressing a button; the AI drives its own beat.
+        // The clinch is decided by Match's beat roll (GrappleIdleState::onTick),
+        // not by the button: a press only hurries the next beat along, which is
+        // what mashing does in the original.
         if (input.anyButtonEdge() && profile_ != nullptr && data_ != nullptr) {
-            const StatusSlot &slot = profile_->status[1];
-            for (int i = 0; i < slot.list_count && i < 4; ++i) {
-                const int id = slot.attack[static_cast<std::size_t>(i)];
-                if (id < 0) continue;
-                const MoveInfo *move = data_->moveInfo(id);
-                if (move == nullptr) continue;
-                beginMove(id);
-                useWrestleStyle(*move, match);
-                match.emit({EventType::GrappleWon, id_, opponent_, 0.0f, state::GRAPPLE_IDLE});
-                return;
-            }
+            state_timer += tuning::kGrappleMashStep;
         }
         if (state_timer > 2.5f) {
             // Time out of the clinch.

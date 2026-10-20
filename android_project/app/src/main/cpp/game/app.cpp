@@ -577,7 +577,7 @@ void GameApp::render(int viewport_x, int viewport_y, int viewport_w, int viewpor
             break;
         case Scene::Match:
             renderer_.drawMatch(match_, 0.0f);
-            renderer_.drawHud(match_, 0);
+            renderer_.drawHud(match_, controlled_);
             if (intro_stage_ != IntroStage::Done) {
                 drawIntroBanner();
             } else {

@@ -27,6 +27,18 @@ second throw, HealEPS 1.4), the mash goals, and the `.tyF` font descriptor
 
 ## Phase 2 - Headless simulation (done)
 
+The clinch resolves through the beat roll in `Match::updateGrappleBeats` for
+`GRAPPLE_IDLE` as well as the high/low stances: a button press only brings the
+next beat forward (`kGrappleMashStep`), it no longer wins the exchange. The
+original's 300 px rope force is measured in its own (wider) ring space; at the
+960x640 logical scale it would cover the whole trapezoid and make every clinch
+an automatic win, so it is clamped to 90 px (`tuning.h` documents this).
+
+An empty energy bar is a loss (`Match::checkExhausted`): without it a wrestler
+drained to zero can sit in `STAND_TIRED` forever - a Rumble cannot pin him, so
+the match would never end. This was the reason six-man Rumbles used to run
+until the test cap without a winner; they now play out in ~3-4 minutes.
+
 `sim/actor.h` is `CActor` (x/y/z, facing, the 4-deep state stack, energy,
 energy_display ghost bar, motion power, power-up). `sim/wrestler.cpp` is
 `CWrestler`: `changeState` with the chain flag, `OpponentState` pairing,
@@ -47,7 +59,8 @@ Verified by `sim_test`: reaction beats, the 51/101 grapple roll (and the
 `sim/match.*` owns the frame order of the original (actors, then AI, then
 referee/counts, then the win check), the opponent targeting, the pin gate and
 cooldown, the outside count, the rule timer/decision, and the Royal Rumble
-toss-out + last-man-standing win condition. The Rumble also staggers its
+toss-out (the loser of a clinch at the ropes) + last-man-standing win
+condition. The Rumble also staggers its
 entrants: `enableStaggeredEntry(interval, initial)` parks everyone past the
 first pair in the aisle (off camera, not targetable, not ticked) and walks them
 in one at a time; the win check stays closed until the aisle is empty.

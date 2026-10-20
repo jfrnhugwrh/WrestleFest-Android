@@ -209,8 +209,10 @@ void Match::update(float dt, const std::vector<InputFrame> &inputs) {
     updateRumbleEntries(dt);
     updateOpponents();
     // Tags are resolved before the actors tick so the blue press makes the
-    // swap instead of turning into a strike.
+    // swap instead of turning into a strike. Exhaustion is checked on the same
+    // pre-tick meters so a heal cannot mask an empty bar.
     tryTags(inputs);
+    checkExhausted();
 
     if (phase_ == MatchPhase::Intro && auto_start_) {
         intro_timer_ += dt;
@@ -365,7 +367,9 @@ void Match::updateGrappleBeats(float dt) {
         Wrestler *w = wrestler(i);
         if (w == nullptr) continue;
         const int s = w->subState();
-        if (s != state::GRAPPLE_HIGH && s != state::GRAPPLE_LOW) continue;
+        if (s != state::GRAPPLE_IDLE && s != state::GRAPPLE_HIGH && s != state::GRAPPLE_LOW) {
+            continue;
+        }
 
         // Only the attacker runs the roll (the victim's facing points back).
         if (w->state_timer < tuning::kGrappleBeat) continue;
@@ -390,6 +394,23 @@ void Match::updateGrappleBeats(float dt) {
         }
         w->state_timer = 0.0f;
 
+        // Royal Rumble: over the top rope. Whoever loses the exchange goes out
+        // when the rule's TossOutPercentage roll succeeds and the pair is at
+        // the ropes - the only way a Rumble ends (GAMEPLAY_IMPLEMENTATION 4.4).
+        Wrestler *beat_winner = win ? w : other;
+        Wrestler *beat_loser = win ? other : w;
+        if (isRumble() && rule_ != nullptr) {
+            const float toss_roll = static_cast<float>(rng_.range(1000)) * 0.1f;  // 0.0-99.9
+            if (toss_roll < rule_->toss_out_percentage &&
+                ring_.nearRope(beat_loser->z, beat_loser->x, tuning::kRumbleTossRange)) {
+                const int loser_id = beat_loser->id();
+                const int winner_id = beat_winner->id();
+                beat_loser->knockOut(*this);
+                emit({EventType::KnockedOut, loser_id, winner_id, toss_roll, state::LOSE});
+                continue;
+            }
+        }
+
         if (win) {
             Wrestler *attacker = w;
             Wrestler *victim = other;
@@ -408,18 +429,6 @@ void Match::updateGrappleBeats(float dt) {
                 }
             }
         } else {
-            // Royal Rumble toss-out: the loser of the beat is thrown over the top
-            // rope when the rule's TossOutPercentage roll succeeds. This is the
-            // only way a rumble ends (GAMEPLAY_IMPLEMENTATION 4.4).
-            if (isRumble() && rule_ != nullptr) {
-                const float roll = static_cast<float>(rng_.range(1000)) * 0.1f;  // 0.0-99.9
-                if (roll < rule_->toss_out_percentage) {
-                    w->knockOut(*this);
-                    emit({EventType::KnockedOut, w->id(), other->id(), roll, state::LOSE});
-                    continue;
-                }
-            }
-
             // The victim reverses: the tables give both sides the same slot.
             Wrestler *attacker = other;
             Wrestler *victim = w;
@@ -515,6 +524,15 @@ void Match::updateRegions() {
     } else {
         outside_timer_ = 0.0f;
         outside_count_ = 0;
+    }
+}
+
+void Match::checkExhausted() {
+    for (int i = 0; i < wrestlerCount(); ++i) {
+        Wrestler *w = wrestler(i);
+        if (w == nullptr || w->isDead() || isOnApron(i) || isWaitingEntrant(i)) continue;
+        if (w->energy > 0.0f) continue;
+        w->knockOut(*this);
     }
 }
 

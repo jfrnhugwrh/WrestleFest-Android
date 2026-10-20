@@ -134,7 +134,9 @@ void AiEntity::tickAttackVsOpponent(Match &match, InputFrame *input, int opponen
             // Grappling is how a match is actually won (a punch does 2 damage
             // against 1.4/s of healing). The AI fights for the clinch most of
             // the time, exactly like AttackState's close-range routing.
-            const bool grapple = match.rng().range(11) < 8;
+            // In a Rumble only the clinch can win (CanPin/CanSubmission are 0),
+            // so the AI always fights for the grapple there.
+            const bool grapple = match.isRumble() || match.rng().range(11) < 8;
             if (grapple && std::fabs(other->x - self->x) > 4.0f) {
                 stickDirection(input, other->x - self->x, other->z - self->z);
             }

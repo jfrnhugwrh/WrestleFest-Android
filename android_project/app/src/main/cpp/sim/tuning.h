@@ -12,6 +12,8 @@ namespace tuning {
 // --- AI beats (seconds) ------------------------------------------------------
 // Reaction beats are "base - perStrength * (strength - 1)". At strength 1 they
 // are the base; at strength 11 a wrestler reacts ~4x faster (0.30 s -> 0.07 s).
+constexpr float kGrappleMashStep = 0.08f;           // a press brings the next beat forward
+constexpr float kRumbleTossRange = 150.0f;           // toss-outs only at the ropes
 constexpr float kTagReach = 70.0f;                  // how close the corner must be to tag
 constexpr float kTagEnergyFraction = 0.35f;         // AI tags out below this energy
 constexpr float kGrappleBeat = 0.30f;              // 0x3e99999a GrappleIdleState::onEnter
@@ -24,7 +26,10 @@ constexpr float kPinEscapeBase = 0.12f;            // 0x3df5c28f BePinState::onE
 constexpr float kPinEscapeRand = 7.63e-7f;         // 0x354cce67 * (rand() & 0x7fff)
 
 // --- Grapple struggle --------------------------------------------------------
-constexpr float kGrappleBeatForcedRange = 300.0f;  // 0x43960000 collisionRing(actor,300,facing)
+// The original's 300 px rope force is measured in its wider ring space; at the
+// 960x640 logical scale our trapezoid is ~520-680 px wide, so 300 px would make
+// every clinch an automatic win. 90 px is the ropes in practice.
+constexpr float kGrappleBeatForcedRange = 90.0f;  // 0x43960000 collisionRing(actor,300,facing)
 constexpr int kGrappleWinRollModulus = 101;        // umod 0x65
 constexpr int kGrappleWinRollThreshold = 49;       // cmp 0x31 -> win when roll > 49
 constexpr int kGrappleWinRollRumble = 90;          // cmp 0x5a -> win when roll < 90
