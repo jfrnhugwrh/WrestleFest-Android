@@ -1,0 +1,67 @@
+name: Build Debug APK
+
+# Manual trigger only — this workflow intentionally has no push/pull_request
+# triggers. Run it from the Actions tab ("Run workflow") or with:
+#   gh workflow run build-debug-apk.yml
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-debug-apk:
+    name: Compile debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    defaults:
+      run:
+        # The Gradle project lives in a subdirectory, not at the repo root.
+        working-directory: android_project
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v5
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle (with caching)
+        # v5 keeps MIT-licensed caching. gradle/actions v6 moved its enhanced
+        # cache to a proprietary component (free only for public repos / free
+        # preview for private ones), so this project stays on v5.
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Install Android SDK packages
+        run: |
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+          # Licenses are pre-accepted on GitHub-hosted runners; this is a
+          # defensive fallback for self-hosted or refreshed images.
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;26.1.10909125" \
+            "cmake;3.22.1"
+
+      - name: Make Gradle wrapper executable
+        # The wrapper is committed with the executable bit; this is a
+        # defensive fallback for checkouts that lose file modes.
+        run: chmod +x ./gradlew
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Upload debug APK artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: wrestlefest-debug-apk
+          path: android_project/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

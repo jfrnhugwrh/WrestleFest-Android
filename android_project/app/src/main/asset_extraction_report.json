@@ -1,0 +1,307 @@
+{
+  "source_ipa": "C:\\Users\\MaxDaBoy\\Downloads\\WrestleFest_Android-arena-660ea579-wrestlefest-android\\my dumped copy.ipa",
+  "app_bundle": "Payload/WrestleFest Premium.app",
+  "bundle_id": "com.thq.wrestlefest02",
+  "executable": "WrestleFest Premium",
+  "frameworks": [],
+  "extracted_files": 980,
+  "files_by_category": {
+    "audio": 146,
+    "data": 271,
+    "graphics": 392,
+    "ui": 171
+  },
+  "files_by_extension": {
+    ".aac": 11,
+    ".crc": 1,
+    ".fsh": 5,
+    ".ini": 1,
+    ".plist": 1,
+    ".png": 541,
+    ".sml": 273,
+    ".ttf": 1,
+    ".txt": 3,
+    ".tyf": 2,
+    ".tyfx": 1,
+    ".vsh": 3,
+    ".wav": 135,
+    "<none>": 2
+  },
+  "detected_signatures": {
+    "PNG": 541,
+    "WAVE": 135
+  },
+  "asset_bundles": [
+    {
+      "path": "Sprites/Arena/crowd/p01.zip",
+      "depth": 0,
+      "members": 24
+    },
+    {
+      "path": "Sprites/Arena/crowd/p02.zip",
+      "depth": 0,
+      "members": 24
+    },
+    {
+      "path": "Sprites/Arena/crowd/p03.zip",
+      "depth": 0,
+      "members": 24
+    },
+    {
+      "path": "Sprites/Arena/crowd/p04.zip",
+      "depth": 0,
+      "members": 24
+    },
+    {
+      "path": "Sprites/Arena/crowd/p05.zip",
+      "depth": 0,
+      "members": 24
+    },
+    {
+      "path": "Sprites/Arena/crowd/p06.zip",
+      "depth": 0,
+      "members": 24
+    },
+    {
+      "path": "Sprites/Arena/crowd/p07.zip",
+      "depth": 0,
+      "members": 24
+    },
+    {
+      "path": "Sprites/Arena/crowd/p08.zip",
+      "depth": 0,
+      "members": 24
+    },
+    {
+      "path": "Sprites/Arena/crowd/p09.zip",
+      "depth": 0,
+      "members": 24
+    },
+    {
+      "path": "Sprites/Arena/crowd/p10.zip",
+      "depth": 0,
+      "members": 24
+    },
+    {
+      "path": "Sprites/Arena/crowd/p11.zip",
+      "depth": 0,
+      "members": 24
+    },
+    {
+      "path": "Sprites/Arena/crowd/p12.zip",
+      "depth": 0,
+      "members": 24
+    },
+    {
+      "path": "Sprites/Arena/crowd/p13.zip",
+      "depth": 0,
+      "members": 24
+    },
+    {
+      "path": "Sprites/Arena/crowd/p14.zip",
+      "depth": 0,
+      "members": 24
+    },
+    {
+      "path": "Sprites/Arena/crowd/p15.zip",
+      "depth": 0,
+      "members": 24
+    },
+    {
+      "path": "Sprites/Character/00_Jake the Snake/wrestler.zip",
+      "depth": 0,
+      "members": 612
+    },
+    {
+      "path": "Sprites/Character/00_John Cena/wrestler.zip",
+      "depth": 0,
+      "members": 618
+    },
+    {
+      "path": "Sprites/Character/00_Randy Orton/wrestler.zip",
+      "depth": 0,
+      "members": 615
+    },
+    {
+      "path": "Sprites/Character/00_Randy Savage/wrestler.zip",
+      "depth": 0,
+      "members": 608
+    },
+    {
+      "path": "Sprites/Character/00_Rey Mysterio/wrestler.zip",
+      "depth": 0,
+      "members": 621
+    },
+    {
+      "path": "Sprites/Character/00_Stone Cold/wrestler.zip",
+      "depth": 0,
+      "members": 609
+    },
+    {
+      "path": "Sprites/Character/00_The Rock/wrestler.zip",
+      "depth": 0,
+      "members": 613
+    },
+    {
+      "path": "Sprites/Character/00_Undertaker/wrestler.zip",
+      "depth": 0,
+      "members": 608
+    },
+    {
+      "path": "Sprites/Character/01_Big_Bossman/wrestler.zip",
+      "depth": 0,
+      "members": 616
+    },
+    {
+      "path": "Sprites/Character/01_CM punk/wrestler.zip",
+      "depth": 0,
+      "members": 594
+    },
+    {
+      "path": "Sprites/Character/01_Shawn_Michaels/wrestler.zip",
+      "depth": 0,
+      "members": 614
+    },
+    {
+      "path": "Sprites/Character/01_Sheamus/wrestler.zip",
+      "depth": 0,
+      "members": 599
+    },
+    {
+      "path": "Sprites/Character/01_TripleH/wrestler.zip",
+      "depth": 0,
+      "members": 611
+    },
+    {
+      "path": "Sprites/Character/02_Alberto Del Rio/wrestler.zip",
+      "depth": 0,
+      "members": 618
+    },
+    {
+      "path": "Sprites/Character/02_Sgt. Slaughter/wrestler.zip",
+      "depth": 0,
+      "members": 621
+    },
+    {
+      "path": "Sprites/Character/02_The Miz/wrestler.zip",
+      "depth": 0,
+      "members": 612
+    },
+    {
+      "path": "Sprites/Character/02_Yokozuna/wrestler.zip",
+      "depth": 0,
+      "members": 603
+    },
+    {
+      "path": "Sprites/Character/02_Zack Ryder/wrestler.zip",
+      "depth": 0,
+      "members": 615
+    },
+    {
+      "path": "Sprites/Character/03_Animal/wrestler.zip",
+      "depth": 0,
+      "members": 606
+    },
+    {
+      "path": "Sprites/Character/03_BigShow/wrestler.zip",
+      "depth": 0,
+      "members": 618
+    },
+    {
+      "path": "Sprites/Character/03_Christian/wrestler.zip",
+      "depth": 0,
+      "members": 628
+    },
+    {
+      "path": "Sprites/Character/03_Hawk/wrestler.zip",
+      "depth": 0,
+      "members": 614
+    },
+    {
+      "path": "Sprites/Character/03_R-truth/wrestler.zip",
+      "depth": 0,
+      "members": 620
+    },
+    {
+      "path": "Sprites/Character/04_DanielBryan/wrestler.zip",
+      "depth": 0,
+      "members": 624
+    },
+    {
+      "path": "Sprites/Character/04_Eddie Guerrero/wrestler.zip",
+      "depth": 0,
+      "members": 612
+    },
+    {
+      "path": "Sprites/Character/04_Edge/wrestler.zip",
+      "depth": 0,
+      "members": 632
+    },
+    {
+      "path": "Sprites/Character/04_Mark Henry/wrestler.zip",
+      "depth": 0,
+      "members": 617
+    },
+    {
+      "path": "Sprites/Character/04_MrPerfect/wrestler.zip",
+      "depth": 0,
+      "members": 605
+    },
+    {
+      "path": "Sprites/Character/05_Cody Rhodes/wrestler.zip",
+      "depth": 0,
+      "members": 603
+    },
+    {
+      "path": "Sprites/Character/05_Kane/wrestler.zip",
+      "depth": 0,
+      "members": 613
+    },
+    {
+      "path": "Sprites/Character/05_Million Dollar Man/wrestler.zip",
+      "depth": 0,
+      "members": 601
+    },
+    {
+      "path": "Sprites/Character/05_RowdyRoddyPiper/wrestler.zip",
+      "depth": 0,
+      "members": 629
+    },
+    {
+      "path": "Sprites/Character/05_Sin Cara/wrestler.zip",
+      "depth": 0,
+      "members": 629
+    },
+    {
+      "path": "Sprites/Character/06_Bartista/wrestler.zip",
+      "depth": 0,
+      "members": 628
+    },
+    {
+      "path": "Sprites/Character/06_Dolph Ziggler/wrestler.zip",
+      "depth": 0,
+      "members": 605
+    },
+    {
+      "path": "Sprites/Character/06_DustyRhodes/wrestler.zip",
+      "depth": 0,
+      "members": 620
+    },
+    {
+      "path": "Sprites/Character/06_KevinNash/wrestler.zip",
+      "depth": 0,
+      "members": 604
+    },
+    {
+      "path": "Sprites/Character/06_Kofi Kingston/wrestler.zip",
+      "depth": 0,
+      "members": 621
+    }
+  ],
+  "raw_texture_candidates": [],
+  "notes": [
+    "Assets are copied without format conversion.",
+    "Nested ZIP asset bundles are preserved under asset_bundles/ without unpacking their members.",
+    "SST sprite containers remain in their original binary format."
+  ]
+}

@@ -1,0 +1,61 @@
+# Built application files
+*.apk
+*.aab
+*.obb
+/obb/
+# Note: assets are preserved in the repository
+# /android_project/app/src/main/assets/
+
+# Files for the ART/Dalvik VM
+*.dex
+
+# Java class files
+*.class
+
+# Generated build directories
+build/
+*/build/
+app/build/
+
+# Gradle cache and lock files
+.gradle/
+*/.gradle/
+buildOutputCleanup/
+
+# Android NDK / CMake build directories
+.cxx/
+*/.cxx/
+app/.cxx/
+*.o
+*.a
+*.so
+
+# Local machine-specific configuration
+local.properties
+
+# Android Studio / IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Visual Studio Code
+.vscode/
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Large dumps, temporary archives, and caches
+*.ipa
+*.tmp
+*.log
+*.zip.tmp
+converted-audio/

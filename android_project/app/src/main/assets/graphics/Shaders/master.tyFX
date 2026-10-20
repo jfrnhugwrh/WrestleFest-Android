@@ -1,0 +1,96 @@
+<SML V1.1>
+<Effect>
+
+<ARRAY|Technique> 7
+	{
+	<STR|name> "Sprite"
+	<ARRAY|Shader> 2
+		{
+		<STR|profile> "vs_2_0es"
+		<STR|source> "Sprite.vsh"
+		}
+		{
+		<STR|profile> "fs_2_0es"
+		<STR|source> "Sprite.fsh"
+		}
+	<ARRAYEND|Shader>
+	}
+	{
+	<STR|name> "SpritePalette"
+	<ARRAY|Shader> 2
+		{
+		<STR|profile> "vs_2_0es"
+		<STR|source> "Sprite.vsh"
+		}
+		{
+		<STR|profile> "fs_2_0es"
+		<STR|source> "SpritePalette.fsh"
+		}
+	<ARRAYEND|Shader>
+	}
+	{
+	<STR|name> "Font"
+	<ARRAY|Shader> 2
+		{
+		<STR|profile> "vs_2_0es"
+		<STR|source> "Sprite.vsh"
+		}
+		{
+		<STR|profile> "fs_2_0es"
+		<STR|source> "Sprite.fsh"
+		}
+	<ARRAYEND|Shader>
+	}
+	{
+	<STR|name> "FontTT"
+	<ARRAY|Shader> 2
+		{
+		<STR|profile> "vs_2_0es"
+		<STR|source> "Sprite.vsh"
+		}
+		{
+		<STR|profile> "fs_2_0es"
+		<STR|source> "FontTT.fsh"
+		}
+	<ARRAYEND|Shader>
+	}
+	{
+	<STR|name> "Blit"
+	<ARRAY|Shader> 2
+		{
+		<STR|profile> "vs_2_0es"
+		<STR|source> "Blit.vsh"
+		}
+		{
+		<STR|profile> "fs_2_0es"
+		<STR|source> "Sprite.fsh"
+		}
+	<ARRAYEND|Shader>
+	}
+	{
+	<STR|name> "Clear"
+	<ARRAY|Shader> 2
+		{
+		<STR|profile> "vs_2_0es"
+		<STR|source> "Sprite.vsh"
+		}
+		{
+		<STR|profile> "fs_2_0es"
+		<STR|source> "Clear.fsh"
+		}
+	<ARRAYEND|Shader>
+	}
+	{
+	<STR|name> "BasicLine"
+	<ARRAY|Shader> 2
+		{
+		<STR|profile> "vs_2_0es"
+		<STR|source> "BasicLine.vsh"
+		}
+		{
+		<STR|profile> "fs_2_0es"
+		<STR|source> "BasicLine.fsh"
+		}
+	<ARRAYEND|Shader>
+	}
+<ARRAYEND|Technique>
