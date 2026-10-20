@@ -102,6 +102,13 @@ private:
     };
 
     bool loadArena(const std::string &folder);
+
+public:
+    // Swaps the arena art (AllArenaTable FolderName). Keeps the default
+    // ARENA02 art when the folder cannot be loaded.
+    bool setArena(const std::string &folder);
+
+private:
     bool loadUi();
     bool loadReferee();
     // Fetches (and caches) one animation frame of a wrestler bundle.

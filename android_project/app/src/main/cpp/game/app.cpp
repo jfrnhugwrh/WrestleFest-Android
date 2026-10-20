@@ -116,6 +116,7 @@ void GameApp::shutdown() {
 
 void GameApp::startMatch(const WrestlerProfile *player, const WrestlerProfile *opponent) {
     if (player == nullptr || opponent == nullptr) return;
+    applyArena();
     const RingGeometry ring;
     match_.configure(&data_, ring, 0,
                      0x20120423u ^ static_cast<std::uint32_t>(clock_ * 1000.0f) ^ 0x9e3779b9u);
@@ -150,6 +151,7 @@ void GameApp::beginMatchFlow(const WrestlerProfile *player, const WrestlerProfil
 
 void GameApp::startRumble(const WrestlerProfile *player, const WrestlerProfile *opponent) {
     if (player == nullptr || opponent == nullptr) return;
+    applyArena();
     const RingGeometry ring;
     match_.configure(&data_, ring, 2,
                      0x20120423u ^ static_cast<std::uint32_t>(clock_ * 1000.0f) ^ 0x9e3779b9u);
@@ -193,6 +195,7 @@ void GameApp::startRumble(const WrestlerProfile *player, const WrestlerProfile *
 
 void GameApp::startTagMatch(const WrestlerProfile *player, const WrestlerProfile *opponent) {
     if (player == nullptr || opponent == nullptr) return;
+    applyArena();
     const RingGeometry ring;
     match_.configure(&data_, ring, 1,
                      0x20120423u ^ static_cast<std::uint32_t>(clock_ * 1000.0f) ^ 0x9e3779b9u);
@@ -252,6 +255,12 @@ void GameApp::update(double frame_seconds) {
             // Mode chip, top right: taps between 1 VS 1 and the Royal Rumble.
             if (y > 14.0f && y < 62.0f && x > 660.0f && x < 946.0f) {
                 mode_ = (mode_ + 1) % 3;
+                break;
+            }
+            // Arena chip, top left.
+            if (y > 14.0f && y < 62.0f && x > 14.0f && x < 300.0f) {
+                const int arena_count = static_cast<int>(data_.arenas().size());
+                if (arena_count > 0) arena_index_ = (arena_index_ + 1) % arena_count;
                 break;
             }
             const bool on_fight = y > 480.0f && x > 60.0f && x < 900.0f;
@@ -386,6 +395,12 @@ void GameApp::updateIntro(float dt) {
         case IntroStage::Done:
             break;
     }
+}
+
+void GameApp::applyArena() {
+    if (data_.arenas().empty()) return;
+    const int index = std::clamp(arena_index_, 0, static_cast<int>(data_.arenas().size()) - 1);
+    renderer_.setArena(data_.arenas()[static_cast<std::size_t>(index)].folder);
 }
 
 void GameApp::playCue(const char *asset) {
@@ -641,6 +656,20 @@ void GameApp::drawSelect() {
     }
     renderer_.drawTextCentered("SELECT YOUR SUPERSTAR", 480.0f, 26.0f, 0.8f,
                                Color{1.0f, 1.0f, 1.0f, 1.0f});
+
+    // Arena chip, top left, from AllArenaTable.
+    {
+        std::string label = "ARENA";
+        if (!data_.arenas().empty()) {
+            const int index = std::clamp(arena_index_, 0,
+                                         static_cast<int>(data_.arenas().size()) - 1);
+            label = data_.arenas()[static_cast<std::size_t>(index)].name;
+            if (label.size() > 26) label = label.substr(0, 26);
+        }
+        batch.draw(renderer_.white(), 18.0f, 18.0f, 282.0f, 40.0f,
+                   Color{0.16f, 0.14f, 0.1f, 0.95f});
+        renderer_.drawTextCentered(label, 159.0f, 30.0f, 0.42f, Color{1.0f, 0.9f, 0.65f, 1.0f});
+    }
 
     // Rule chip: 1 VS 1 or the Royal Rumble, straight from InGameTable.
     {

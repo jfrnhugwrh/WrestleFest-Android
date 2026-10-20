@@ -68,6 +68,8 @@ private:
     void startTagMatch(const WrestlerProfile *player, const WrestlerProfile *opponent);
     // Shared tail of both setups: entrance staging, timers, scene change.
     void beginMatchFlow(const WrestlerProfile *player, const WrestlerProfile *opponent);
+    // Applies the selected arena art (falls back to the default arena).
+    void applyArena();
     void stepSimulation(float dt);
     void updateTouchInput();
     void drawTitle();
@@ -135,6 +137,8 @@ private:
     bool paused_ = false;
     // 0 = 1 VS 1 (rule 0), 1 = Royal Rumble (rule 2), 2 = Tag (rule 1).
     int mode_ = 0;
+    // Index into AllArenaTable; the art folder is applied when a match starts.
+    int arena_index_ = 0;
     // Index of the wrestler the human is driving; a tag hands it to the partner.
     int controlled_ = 0;
     bool tap_pending_ = false;

@@ -85,7 +85,8 @@ void GameRenderer::shutdown() {
     for (Texture *texture : {&ui_background_, &title_logo_, &tap_to_start_, &superstar_frame_,
                              &superstar_select_, &arrow_previous_, &arrow_next_, &arrow_point_,
                              &button_strip_, &pause_button_, &pause_button_pressed_,
-                             &pause_background_, &pause_menu_button_}) {
+                             &pause_background_, &pause_menu_button_, &report_frame_,
+                             &report_background_}) {
         if (texture->valid()) glDeleteTextures(1, &texture->id);
     }
     for (auto &bundle : bundles_) {
@@ -120,6 +121,18 @@ bool GameRenderer::loadArena(const std::string &folder) {
     arena_.origin_x = 480.0f - 742.0f * kArtScale;
     arena_.origin_y = 560.0f - 430.0f * kArtScale;
     return arena_.background.valid();
+}
+
+bool GameRenderer::setArena(const std::string &folder) {
+    if (folder.empty()) return false;
+    for (Texture *texture : {&arena_.ground, &arena_.background, &arena_.ropes_front,
+                             &arena_.shadow}) {
+        if (texture->valid()) {
+            glDeleteTextures(1, &texture->id);
+            *texture = Texture{};
+        }
+    }
+    return loadArena(folder);
 }
 
 bool GameRenderer::loadUi() {
