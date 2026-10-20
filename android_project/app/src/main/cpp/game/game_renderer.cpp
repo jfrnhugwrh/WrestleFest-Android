@@ -571,6 +571,24 @@ void GameRenderer::drawHud(const Match &match, int player_index) {
 
     drawTimer(match);
 
+    // Royal Rumble: how many are left and when the next man walks in.
+    if (match.isRumble()) {
+        int left = 0;
+        for (int i = 0; i < count; ++i) {
+            const Wrestler *w = match.wrestler(i);
+            if (w != nullptr && !w->isDead()) ++left;
+        }
+        left += match.waitingEntrants();
+        char line[64];
+        std::snprintf(line, sizeof(line), "ROYAL RUMBLE   %d LEFT", left);
+        drawTextCentered(line, 480.0f, 128.0f, 0.7f, Color{1.0f, 0.85f, 0.3f, 1.0f});
+        if (match.waitingEntrants() > 0) {
+            std::snprintf(line, sizeof(line), "NEXT ENTRANT IN %d",
+                          static_cast<int>(match.nextEntryIn() + 0.999f));
+            drawTextCentered(line, 480.0f, 158.0f, 0.5f, Color{0.85f, 0.9f, 1.0f, 1.0f});
+        }
+    }
+
     // Referee count, big and centred, while a pin is being counted.
     if (match.referee().counting()) {
         const int value = match.referee().count();

@@ -3,6 +3,8 @@
 #define WRESTLEFEST_HOST_STUB_ANDROID_APP_GLUE
 #include <android/input.h>
 #include <android/native_window.h>
+#include <jni.h>
+#include <android/asset_manager.h>
 
 #define GAMEACTIVITY_MAX_NUM_POINTERS_IN_MOTION_EVENT 16
 #define GAME_ACTIVITY_POINTER_INFO_AXIS_COUNT 48
@@ -45,7 +47,14 @@ enum {
     APP_CMD_CONTENT_RECT_CHANGED = 15,
 };
 
+struct ANativeActivity {
+    JavaVM *vm;
+    jobject javaGameActivity;
+    AAssetManager *assetManager;
+};
+
 struct android_app {
+    ANativeActivity *activity;
     void *userData;
     void (*onAppCmd)(struct android_app *app, std::int32_t cmd);
     ANativeWindow *window;

@@ -46,6 +46,16 @@ public:
     // holds the match in MatchPhase::Intro until it calls start().
     void playEntrance();
 
+    // Royal Rumble entrant timing: the first `initial_entrants` start in the
+    // ring and the rest walk in from the aisle one every `interval` seconds,
+    // which is how the original's Rumble keeps the ring at two to four bodies.
+    // Call before start(); ignored outside the Rumble rule.
+    void enableStaggeredEntry(float interval, int initial_entrants);
+    bool staggeredEntry() const { return entry_interval_ > 0.0f; }
+    int waitingEntrants() const { return static_cast<int>(pending_entrants_.size()); }
+    // Seconds until the next entrant walks in (0 when nobody is waiting).
+    float nextEntryIn() const;
+
     // When true (default) Match rings the bell itself after a short intro beat.
     // The screen flow disables it and calls start() when its own entrance and
     // announcer beats are done.
@@ -101,6 +111,11 @@ private:
     // CWrestler::GetOpponent: every wrestler points at its nearest live enemy.
     // Paired moves keep the opponent they started with.
     void updateOpponents();
+    void updateRumbleEntries(float dt);
+    // Moves every entrant past the starting pair to the aisle (no-op unless the
+    // Rumble rule and staggered entry are both active).
+    void parkLateEntrants();
+    bool isWaitingEntrant(int index) const;
 
     const GameData *data_ = nullptr;
     const RuleInfo *rule_ = nullptr;
@@ -122,6 +137,10 @@ private:
     float pin_cooldown_ = 0.0f;
     bool grapple_resolved_ = false;
     bool auto_start_ = true;
+    float entry_interval_ = 0.0f;
+    int entry_initial_ = 2;
+    float entry_timer_ = 0.0f;
+    std::vector<int> pending_entrants_;
 
     // AI: one entity per wrestler, index-aligned. Entity 0 is the human unless
     // setAiControlled() is called for it.

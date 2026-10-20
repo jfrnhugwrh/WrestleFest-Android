@@ -26,6 +26,7 @@ typedef struct z_stream_s {
 #define Z_STREAM_END 1
 #define Z_FINISH 4
 extern "C" int inflateInit2_(z_stream *strm, int windowBits, const char *version, int stream_size);
+extern "C" unsigned long crc32(unsigned long crc, const Bytef *buf, uInt len);
 extern "C" int inflate(z_stream *strm, int flush);
 extern "C" int inflateEnd(z_stream *strm);
 #define inflateInit2(strm, windowBits) \

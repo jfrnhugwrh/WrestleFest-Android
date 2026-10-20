@@ -35,6 +35,9 @@ void Match::configure(const GameData *data, const RingGeometry &ring, int rule_i
     grapple_beat_timer_ = 0.0f;
     grapple_resolved_ = false;
     auto_start_ = true;
+    entry_interval_ = 0.0f;
+    entry_timer_ = 0.0f;
+    pending_entrants_.clear();
     referee_.setup(data, &ring_, rule_ != nullptr ? rule_->max_referee_count : 3);
 }
 
@@ -68,8 +71,68 @@ void Match::start() {
     phase_ = MatchPhase::Running;
     clock_ = 0.0f;
     emit({EventType::Bell, -1, -1, 0.0f, state::IDLE});
-    for (Wrestler &w : wrestlers_) {
+
+    // Royal Rumble: hold the late entrants off the camera until their cue.
+    // They are parked in the aisle, not targetable, so the AI never looks at a
+    // wrestler who is not in the match yet.
+    parkLateEntrants();
+    entry_timer_ = 0.0f;
+
+    for (int i = 0; i < static_cast<int>(wrestlers_.size()); ++i) {
+        Wrestler &w = wrestlers_[static_cast<std::size_t>(i)];
+        if (isWaitingEntrant(i)) continue;
         w.changeState(state::IDLE, 0, *this);
+    }
+}
+
+void Match::enableStaggeredEntry(float interval, int initial_entrants) {
+    entry_interval_ = std::max(0.0f, interval);
+    entry_initial_ = initial_entrants;
+    // Before the bell the card can already be parked, so the entrance never
+    // shows six men standing in the ring at once.
+    if (phase_ == MatchPhase::Intro) parkLateEntrants();
+}
+
+void Match::parkLateEntrants() {
+    pending_entrants_.clear();
+    if (!isRumble() || entry_interval_ <= 0.0f || wrestlers_.empty()) return;
+    const int initial = std::clamp(entry_initial_, 1, static_cast<int>(wrestlers_.size()));
+    for (int i = initial; i < static_cast<int>(wrestlers_.size()); ++i) {
+        Wrestler &w = wrestlers_[static_cast<std::size_t>(i)];
+        pending_entrants_.push_back(i);
+        w.active = false;
+        w.x = -600.0f;
+        w.z = ring_.centerZ();
+        w.facing = 1.0f;
+    }
+}
+
+float Match::nextEntryIn() const {
+    if (pending_entrants_.empty()) return 0.0f;
+    return std::max(0.0f, entry_interval_ - entry_timer_);
+}
+
+bool Match::isWaitingEntrant(int index) const {
+    return std::find(pending_entrants_.begin(), pending_entrants_.end(), index) !=
+           pending_entrants_.end();
+}
+
+void Match::updateRumbleEntries(float dt) {
+    if (pending_entrants_.empty() || phase_ != MatchPhase::Running) return;
+    entry_timer_ += dt;
+    while (!pending_entrants_.empty() && entry_timer_ >= entry_interval_) {
+        entry_timer_ -= entry_interval_;
+        const int index = pending_entrants_.front();
+        pending_entrants_.erase(pending_entrants_.begin());
+        Wrestler *w = wrestler(index);
+        if (w == nullptr || w->isDead()) continue;
+        // Walk in from the aisle to the left apron, facing the ring.
+        w->x = ring_.leftX(ring_.centerZ()) - 40.0f;
+        w->z = ring_.centerZ();
+        w->facing = 1.0f;
+        w->active = true;
+        w->changeState(state::WALK, 0, *this);
+        emit({EventType::Announcer, index, -1, 0.0f, state::WALK});
     }
 }
 
@@ -139,6 +202,7 @@ void Match::updateOpponents() {
 
 void Match::update(float dt, const std::vector<InputFrame> &inputs) {
     clock_ += dt;
+    updateRumbleEntries(dt);
     updateOpponents();
 
     if (phase_ == MatchPhase::Intro && auto_start_) {
@@ -151,6 +215,8 @@ void Match::update(float dt, const std::vector<InputFrame> &inputs) {
     for (int i = 0; i < wrestlerCount(); ++i) {
         Wrestler *w = wrestler(i);
         if (w == nullptr) continue;
+        // An entrant still in the aisle is frozen: no ticking, no AI, no clamp.
+        if (isWaitingEntrant(i)) continue;
         InputFrame input;
         const bool ai_driven =
             i < static_cast<int>(ai_controlled_.size()) &&
@@ -170,6 +236,7 @@ void Match::update(float dt, const std::vector<InputFrame> &inputs) {
         for (int i = 0; i < wrestlerCount(); ++i) {
             if (i >= static_cast<int>(ai_controlled_.size())) continue;
             if (!ai_controlled_[static_cast<std::size_t>(i)]) continue;
+            if (isWaitingEntrant(i)) continue;
             Wrestler *w = wrestler(i);
             if (w == nullptr || w->isDead()) continue;
             InputFrame frame;
@@ -387,6 +454,7 @@ void Match::checkWinConditions(float dt) {
     // Royal Rumble: last wrestler still standing wins. Each entrant is his own
     // side, so the team checks below do not apply.
     if (isRumble()) {
+        if (!pending_entrants_.empty()) return;
         int alive = 0;
         int winner = -1;
         for (int i = 0; i < wrestlerCount(); ++i) {

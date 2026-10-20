@@ -123,6 +123,10 @@ void GameApp::startMatch(const WrestlerProfile *player, const WrestlerProfile *o
     match_.addWrestler(opponent, 1, ring.centerX() + 110.0f, ring.centerZ() + 20.0f, -1.0f);
     match_.setAiControlled(0, false);  // the human
     match_.setAiControlled(1, true);
+    beginMatchFlow(player, opponent);
+}
+
+void GameApp::beginMatchFlow(const WrestlerProfile *player, const WrestlerProfile *opponent) {
     // The flow owns the bell: entrance first, then the announcer, then FIGHT.
     match_.allowAutoStart(false);
     match_.playEntrance();
@@ -132,7 +136,7 @@ void GameApp::startMatch(const WrestlerProfile *player, const WrestlerProfile *o
     intro_stage_length_ = 3.2f;
     // Entrance music: the original streams a track per superstar; the WAV cue
     // set here is the announcer, which plays on the announce beats below.
-    inputs_.assign(2, InputFrame{});
+    inputs_.assign(static_cast<std::size_t>(match_.wrestlerCount()), InputFrame{});
     accumulator_ = 0.0;
     finish_hold_ = 0.0f;
     red_edge_ = blue_edge_ = false;
@@ -141,6 +145,48 @@ void GameApp::startMatch(const WrestlerProfile *player, const WrestlerProfile *o
     scene_ = Scene::Match;
     __android_log_print(ANDROID_LOG_INFO, kLogTag, "match start: %s vs %s", player->name.c_str(),
                         opponent->name.c_str());
+}
+
+void GameApp::startRumble(const WrestlerProfile *player, const WrestlerProfile *opponent) {
+    if (player == nullptr || opponent == nullptr) return;
+    const RingGeometry ring;
+    match_.configure(&data_, ring, 2,
+                     0x20120423u ^ static_cast<std::uint32_t>(clock_ * 1000.0f) ^ 0x9e3779b9u);
+
+    // The player is entrant one and starts in the ring; five more men fill the
+    // card, each on his own side (a Rumble has no teams), walking in every 25 s.
+    match_.addWrestler(player, 0, ring.centerX() - 120.0f, ring.centerZ() + 20.0f, 1.0f);
+    match_.addWrestler(opponent, 1, ring.centerX() + 120.0f, ring.centerZ() + 20.0f, -1.0f);
+    const int count = static_cast<int>(data_.wrestlers().size());
+    int cursor = 0;
+    for (int i = 2; i < 6 && count > 0; ++i) {
+        int pick = -1;
+        for (int attempts = 0; attempts < count; ++attempts) {
+            const int candidate = (selected_player_ + 3 * i + cursor) % count;
+            ++cursor;
+            const WrestlerProfile &candidate_profile =
+                data_.wrestlers()[static_cast<std::size_t>(candidate)];
+            bool already_in = candidate_profile.folder == player->folder ||
+                              candidate_profile.folder == opponent->folder;
+            for (int j = 2; j < i && !already_in; ++j) {
+                const Wrestler *w = match_.wrestler(j);
+                already_in = w != nullptr && w->profile() != nullptr &&
+                             w->profile()->folder == candidate_profile.folder;
+            }
+            if (!already_in) {
+                pick = candidate;
+                break;
+            }
+        }
+        if (pick < 0) break;
+        const float offset = -120.0f + 60.0f * static_cast<float>(i - 2);
+        match_.addWrestler(&data_.wrestlers()[static_cast<std::size_t>(pick)], i,
+                           ring.centerX() + offset, ring.centerZ(), 1.0f);
+    }
+    match_.setAiControlled(0, false);  // the human
+    for (int i = 1; i < match_.wrestlerCount(); ++i) match_.setAiControlled(i, true);
+    match_.enableStaggeredEntry(25.0f, 2);
+    beginMatchFlow(player, opponent);
 }
 
 // ---------------------------------------------------------------------------
@@ -165,10 +211,22 @@ void GameApp::update(double frame_seconds) {
             const float y = tap_y_;
             const int count = static_cast<int>(data_.wrestlers().size());
             if (count <= 1) break;
+            // Mode chip, top right: taps between 1 VS 1 and the Royal Rumble.
+            if (y > 14.0f && y < 62.0f && x > 660.0f && x < 946.0f) {
+                mode_ = (mode_ + 1) % 2;
+                break;
+            }
             const bool on_fight = y > 480.0f && x > 60.0f && x < 900.0f;
             if (on_fight) {
-                startMatch(&data_.wrestlers()[static_cast<std::size_t>(selected_player_)],
-                           &data_.wrestlers()[static_cast<std::size_t>(selected_opponent_)]);
+                const WrestlerProfile &player =
+                    data_.wrestlers()[static_cast<std::size_t>(selected_player_)];
+                const WrestlerProfile &opponent =
+                    data_.wrestlers()[static_cast<std::size_t>(selected_opponent_)];
+                if (mode_ == 1) {
+                    startRumble(&player, &opponent);
+                } else {
+                    startMatch(&player, &opponent);
+                }
             } else if (x < 480.0f) {
                 // Left panel: tap the arrows/portrait to cycle the player.
                 selected_player_ = (selected_player_ + 1) % count;
@@ -218,6 +276,14 @@ void GameApp::update(double frame_seconds) {
             }
             if (steps == tuning::kMaxStepsPerFrame) accumulator_ = 0.0;
 
+            // In a Rumble the match outlives the player: once entrant one is
+            // gone the result screen comes up (the original does the same).
+            if (match_.isRumble() && match_.phase() == MatchPhase::Running) {
+                const Wrestler *player_wrestler = match_.wrestler(0);
+                if (player_wrestler != nullptr && player_wrestler->isDead()) {
+                    match_.finish(-1);
+                }
+            }
             if (match_.phase() == MatchPhase::Finished) {
                 finish_hold_ += static_cast<float>(frame_seconds);
                 if (finish_hold_ > 2.5f) {
@@ -353,6 +419,10 @@ void GameApp::stepSimulation(float dt) {
 // ---------------------------------------------------------------------------
 void GameApp::touchDown(int pointer_id, float x, float y) {
     if (scene_ == Scene::Match && paused_) {
+        if (insideCircle(x, y, kPauseX, kPauseY, kPauseRadius)) {
+            paused_ = false;  // the pause button doubles as resume
+            return;
+        }
         if (x > 300.0f && x < 660.0f) {
             if (y > kResumeY - 30.0f && y < kResumeY + 30.0f) {
                 paused_ = false;
@@ -520,6 +590,15 @@ void GameApp::drawSelect() {
     renderer_.drawTextCentered("SELECT YOUR SUPERSTAR", 480.0f, 26.0f, 0.8f,
                                Color{1.0f, 1.0f, 1.0f, 1.0f});
 
+    // Rule chip: 1 VS 1 or the Royal Rumble, straight from InGameTable.
+    {
+        const char *label = mode_ == 1 ? "ROYAL RUMBLE" : "1 VS 1";
+        const bool rumble = mode_ == 1;
+        batch.draw(renderer_.white(), 664.0f, 18.0f, 278.0f, 40.0f,
+                   rumble ? Color{0.55f, 0.14f, 0.1f, 0.95f} : Color{0.12f, 0.2f, 0.36f, 0.95f});
+        renderer_.drawTextCentered(label, 803.0f, 30.0f, 0.5f, Color{1.0f, 0.9f, 0.65f, 1.0f});
+    }
+
     const int count = static_cast<int>(data_.wrestlers().size());
     if (count == 0) return;
     const int player_index = selected_player_;
@@ -598,11 +677,13 @@ void GameApp::drawPauseOverlay() {
     SpriteBatch &batch = renderer_.batch();
     if (renderer_.pauseMenuBackground().valid()) {
         batch.draw(renderer_.pauseMenuBackground(), 0.0f, 0.0f, 960.0f, 640.0f,
-                   Color{1.0f, 1.0f, 1.0f, 0.92f});
+                   Color{1.0f, 1.0f, 1.0f, 0.86f});
     } else {
         batch.draw(renderer_.white(), 0.0f, 0.0f, 960.0f, 640.0f, Color{0.0f, 0.0f, 0.0f, 0.75f});
     }
-    renderer_.drawTextCentered("PAUSED", 480.0f, 170.0f, 1.5f, Color{1.0f, 0.85f, 0.3f, 1.0f});
+    // The shipped backdrop is a light brushed-metal sheet, so the heading is
+    // dark and the button labels stay white on the dark button art.
+    renderer_.drawTextCentered("PAUSED", 480.0f, 168.0f, 1.5f, Color{0.07f, 0.09f, 0.13f, 1.0f});
 
     auto row = [&](const char *label, float y) {
         if (renderer_.pauseMenuButton().valid()) {
@@ -616,8 +697,8 @@ void GameApp::drawPauseOverlay() {
     };
     row("RESUME", kResumeY);
     row("QUIT TO SELECT", kQuitY);
-    renderer_.drawTextCentered("tap the pause button again to keep playing", 480.0f, 560.0f, 0.4f,
-                               Color{0.8f, 0.85f, 0.95f, 1.0f});
+    renderer_.drawTextCentered("RESUME or the pause button to keep playing", 480.0f, 560.0f, 0.4f,
+                               Color{0.12f, 0.15f, 0.2f, 1.0f});
 }
 
 void GameApp::drawIntroBanner() {

@@ -47,7 +47,10 @@ Verified by `sim_test`: reaction beats, the 51/101 grapple roll (and the
 `sim/match.*` owns the frame order of the original (actors, then AI, then
 referee/counts, then the win check), the opponent targeting, the pin gate and
 cooldown, the outside count, the rule timer/decision, and the Royal Rumble
-toss-out + last-man-standing win condition. `sim/referee.*` runs the four master
+toss-out + last-man-standing win condition. The Rumble also staggers its
+entrants: `enableStaggeredEntry(interval, initial)` parks everyone past the
+first pair in the aisle (off camera, not targetable, not ticked) and walks them
+in one at a time; the win check stays closed until the aisle is empty. `sim/referee.*` runs the four master
 states and the pin/give-up/tag sub-states. `sim/ai.*` implements the twelve AI
 states with the reaction beats from `tuning.h`.
 
@@ -77,15 +80,17 @@ the APK on a device.
 `game/app.*` runs Title -> Select -> Entrance/announcer/bell -> Match ->
 Result, with the shipped front-end art, the virtual pad from the control sheet
 (d-pad bottom left, blue and red buttons on the right, pause button), a pause
-menu, and event-driven audio cues through `AudioPlayer::playAsset`.
+menu (`ui/Sprites/UI/pause/`) that freezes the sim, a rule chip on the select
+screen (1 VS 1 / Royal Rumble, six entrants with staggered entry and a HUD
+countdown), and event-driven audio cues through `AudioPlayer::playAsset`.
 
-Still open: arena/rule selection screens, the post-match report (`Score` values
+Still open: arena selection and tag-team selection, the post-match report (`Score` values
 from `SuperStarWSTable`), entrances walking in from the stage, tag and rumble
 flow in the UI, music streaming, and save/profile.
 
 ## Phase 6 - Modes and polish (open)
 
-Tag and Royal Rumble flow (the simulation side of the rumble works), Gauntlet,
+Tag flow, Gauntlet,
 Road to WrestleMania, shop, crowd reactions, replays.
 
 ## Known gaps / next steps
@@ -93,8 +98,9 @@ Road to WrestleMania, shop, crowd reactions, replays.
 1. Device check of the renderer (this sandbox has no GPU): confirm the arena
    placement, the palette shader and the HUD on real hardware.
 2. Entrance walk-in: `playEntrance()` currently plays the `ENTRANCE` animation
-   standing in the ring; `EntranceInfo.anims` and `WalkFactor` are loaded and
-   ready to drive an entrance path.
+   standing in the ring; the Rumble aisle walk-in is in place, so the same path
+   can be reused for the entrance walk; `EntranceInfo.anims` and `WalkFactor`
+   are loaded and ready to drive it.
 3. Tag-team rules: `Match` is team-aware, but the tag-in/tag-out AI routing is
    not written yet.
 4. Music: `audio/Music` is untouched; `AudioPlayer` handles WAV only.

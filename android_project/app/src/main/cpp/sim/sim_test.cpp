@@ -326,6 +326,63 @@ int main(int argc, char **argv) {
     }
 
     // ------------------------------------------------------------------
+    std::printf("[royal rumble entries]\n");
+    {
+        // Two men start, the rest walk in one at a time. Until the last entrant
+        // has arrived nobody can win, even if only one is left standing.
+        Match match;
+        match.configure(&data, ring, 2, 0x2468u);
+        match.allowAutoStart(false);
+        const char *const folders[5] = {"00_John Cena", "03_BigShow", "05_Kane", "06_Bartista",
+                                        "01_TripleH"};
+        for (int i = 0; i < 5; ++i) {
+            match.addWrestler(data.wrestlerByFolder(folders[i]), i,
+                              ring.centerX() - 120.0f + 80.0f * i, ring.centerZ(), 1.0f);
+        }
+        match.enableStaggeredEntry(4.0f, 2);
+        check(match.waitingEntrants() == 3, "three entrants are waiting in the aisle");
+        check(!match.wrestler(2)->active && match.wrestler(2)->x < 0.0f,
+              "a waiting entrant is off camera and cannot be targeted");
+        match.start();
+
+        std::vector<InputFrame> idle(5);
+        // A waiting entrant must not drift into the ring: the sim skips them.
+        for (int step = 0; step < 60; ++step) match.update(1.0f / 60.0f, idle);
+        check(match.wrestler(4)->x < 0.0f, "a waiting entrant stays off camera");
+        int joined = 0;
+        float seconds = 1.0f;
+        float first_arrival = -1.0f;
+        for (int step = 0; step < 60 * 20; ++step) {
+            match.update(1.0f / 60.0f, idle);
+            for (const SimEvent &event : match.events()) {
+                if (event.type == EventType::Announcer && event.state == state::WALK) {
+                    ++joined;
+                    if (first_arrival < 0.0f) first_arrival = seconds;
+                    Wrestler *entrant = match.wrestler(event.actor);
+                    check(entrant != nullptr && entrant->active, "an entrant becomes active");
+                    check(entrant != nullptr && entrant->x > 0.0f, "an entrant walks in on camera");
+                }
+            }
+            match.clearEvents();
+            seconds += 1.0f / 60.0f;
+        }
+        std::printf("  info %d entrants in 20s, first at %.2fs, %d still waiting\n", joined,
+                    first_arrival, match.waitingEntrants());
+        check(joined == 3, "every rumble entrant walks in");
+        check(first_arrival > 3.5f && first_arrival < 4.5f, "the first entrant arrives on the beat");
+        check(match.waitingEntrants() == 0, "no entrant is left in the aisle");
+
+        // With everyone in the ring the last-man-standing rule is live again.
+        for (int i = 0; i < 5; ++i) {
+            Wrestler *w = match.wrestler(i);
+            if (w != nullptr && i != 4) w->knockOut(match);
+        }
+        match.update(1.0f / 60.0f, idle);
+        check(match.phase() == MatchPhase::Finished && match.winnerTeam() == 4,
+              "the last entrant wins once the ring is empty");
+    }
+
+    // ------------------------------------------------------------------
     std::printf("[determinism]\n");
     {
         auto play = [&](std::uint32_t seed) {

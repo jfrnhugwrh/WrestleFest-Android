@@ -15,6 +15,8 @@ for f in \
     "$SRC"/render/image.cpp \
     "$SRC"/render/gl_sprite.cpp \
     "$SRC"/render/zip_reader.cpp \
+    "$SRC"/obb_archive.cpp \
+    "$SRC"/asset_loader.cpp \
     "$SRC"/game/game_renderer.cpp \
     "$SRC"/game/app.cpp \
     "$SRC"/main.cpp
