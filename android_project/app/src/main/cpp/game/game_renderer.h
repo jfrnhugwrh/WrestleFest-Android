@@ -68,6 +68,7 @@ public:
     const Texture &buttonStrip() const { return button_strip_; }
     const Texture &pauseButton() const { return pause_button_; }
     const Texture &reportFrame() const { return report_frame_; }
+    const Texture &reportBackground() const { return report_background_; }
     const Texture &pauseMenuBackground() const { return pause_background_; }
     const Texture &pauseMenuButton() const { return pause_menu_button_; }
 
@@ -132,6 +133,7 @@ private:
     Texture pause_background_;
     Texture pause_menu_button_;
     Texture report_frame_;
+    Texture report_background_;
     Texture label_1p_;
     Texture label_2p_;
     Texture ref_count_[10];

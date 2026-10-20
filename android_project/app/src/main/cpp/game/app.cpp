@@ -716,40 +716,51 @@ void GameApp::drawResult() {
     const Wrestler *winner = match_.wrestler(winner_index);
     const Wrestler *controlled = match_.wrestler(controlled_);
 
-    // The shipped report card: a framed white sheet on a metal desk, exactly
-    // the screen the original shows after the bell.
-    if (renderer_.reportFrame().valid()) {
-        batch.draw(renderer_.reportFrame(), 0.0f, 0.0f, 960.0f, 640.0f, Color{});
+    // The shipped report card: frame.png is a mask (the sheet is transparent in
+    // its middle), so the interview backdrop goes underneath, then the winner,
+    // then the frame on top.
+    batch.draw(renderer_.white(), 0.0f, 0.0f, 960.0f, 640.0f, Color{0.22f, 0.23f, 0.26f, 1.0f});
+    const float card_x = 63.0f;
+    const float card_y = 64.0f;
+    const float card_w = 664.0f;
+    const float card_h = 439.0f;
+    if (renderer_.reportBackground().valid()) {
+        batch.draw(renderer_.reportBackground(), card_x, card_y, card_w, card_h, Color{});
     } else {
-        batch.draw(renderer_.white(), 0.0f, 0.0f, 960.0f, 640.0f, Color{0.1f, 0.1f, 0.12f, 1.0f});
+        batch.draw(renderer_.white(), card_x, card_y, card_w, card_h, Color{0.12f, 0.16f, 0.28f, 1.0f});
     }
 
-    const Color ink{0.09f, 0.1f, 0.14f, 1.0f};
-    const Color accent = player_won ? Color{0.72f, 0.5f, 0.06f, 1.0f}
-                                    : Color{0.62f, 0.12f, 0.1f, 1.0f};
-    renderer_.drawTextCentered("MATCH RESULT", 397.0f, 74.0f, 0.8f, ink);
+    const Color light{1.0f, 0.97f, 0.88f, 1.0f};
+    const Color accent = player_won ? Color{1.0f, 0.84f, 0.3f, 1.0f}
+                                    : Color{1.0f, 0.45f, 0.4f, 1.0f};
+    renderer_.drawTextCentered("MATCH RESULT", 395.0f, 84.0f, 0.85f, Color{0.9f, 0.94f, 1.0f, 1.0f});
 
     if (winner != nullptr && winner->profile() != nullptr) {
         const WrestlerProfile &profile = *winner->profile();
         const int sst = profile.sprite_index.count("idle.sst") ? profile.sprite_index.at("idle.sst")
                                                               : -1;
-        renderer_.drawActorPortrait(profile, sst, 397.0f, 400.0f, 1.0f, 0.5f);
-        renderer_.drawTextCentered(profile.name_line1, 397.0f, 412.0f, 0.85f, ink);
+        renderer_.drawActorPortrait(profile, sst, 395.0f, 420.0f, 1.0f, 0.8f);
+        renderer_.drawTextCentered(profile.name_line1, 395.0f, 436.0f, 0.85f, light);
         if (!profile.name_line2.empty()) {
-            renderer_.drawTextCentered(profile.name_line2, 397.0f, 440.0f, 0.55f, ink);
+            renderer_.drawTextCentered(profile.name_line2, 395.0f, 464.0f, 0.55f, light);
         }
     }
-    renderer_.drawTextCentered(player_won ? "WINNER" : "DEFEATED", 397.0f, 468.0f, 0.8f, accent);
+    renderer_.drawTextCentered(player_won ? "WINNER" : "DEFEATED", 395.0f, 478.0f, 0.65f, accent);
 
-    // The little panel at the bottom right carries the numbers.
+    // The little panel on the frame carries the numbers.
+    const Color ink{0.1f, 0.11f, 0.13f, 1.0f};
     char line[64];
     const int total_seconds = static_cast<int>(match_.clock());
-    std::snprintf(line, sizeof(line), "TIME  %d:%02d", total_seconds / 60, total_seconds % 60);
-    renderer_.drawTextCentered(line, 828.0f, 500.0f, 0.42f, ink);
+    std::snprintf(line, sizeof(line), "TIME %d:%02d", total_seconds / 60, total_seconds % 60);
+    renderer_.drawTextCentered(line, 830.0f, 508.0f, 0.4f, ink);
     const int score = controlled != nullptr ? controlled->score : 0;
-    std::snprintf(line, sizeof(line), "SCORE  %d", score);
-    renderer_.drawTextCentered(line, 828.0f, 528.0f, 0.42f, ink);
-    renderer_.drawTextCentered("tap to continue", 828.0f, 560.0f, 0.38f, ink);
+    std::snprintf(line, sizeof(line), "SCORE %d", score);
+    renderer_.drawTextCentered(line, 830.0f, 534.0f, 0.4f, ink);
+    renderer_.drawTextCentered("tap to continue", 830.0f, 562.0f, 0.36f, ink);
+
+    if (renderer_.reportFrame().valid()) {
+        batch.draw(renderer_.reportFrame(), 0.0f, 0.0f, 960.0f, 640.0f, Color{});
+    }
 }
 
 void GameApp::drawPauseOverlay() {

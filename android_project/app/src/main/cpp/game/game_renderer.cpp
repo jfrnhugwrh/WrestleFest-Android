@@ -175,6 +175,7 @@ bool GameRenderer::loadUi() {
     load("graphics/Sprites/virtual_pad/pause_btn_clicked.png", &pause_button_pressed_);
     load("ui/Sprites/UI/pause/background.png", &pause_background_);
     load("ui/Sprites/UI/report/frame.png", &report_frame_);
+    load("ui/Sprites/UI/report/background.png", &report_background_);
     load("ui/Sprites/UI/pause/button.png", &pause_menu_button_);
     return true;
 }
