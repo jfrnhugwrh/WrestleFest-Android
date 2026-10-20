@@ -383,6 +383,94 @@ int main(int argc, char **argv) {
     }
 
     // ------------------------------------------------------------------
+    std::printf("[tag team]\n");
+    {
+        // Rule 1 (2 VS 2): one man per team in the ring, the partner on the
+        // apron. Blue next to the corner swaps them.
+        Match match;
+        match.configure(&data, ring, 1, 0x5150u);
+        match.allowAutoStart(false);
+        const char *const folders[4] = {"00_John Cena", "06_Bartista", "01_TripleH", "05_Kane"};
+        for (int i = 0; i < 4; ++i) {
+            match.addWrestler(data.wrestlerByFolder(folders[i]), i / 2,
+                              ring.centerX() - 120.0f + 80.0f * i, ring.centerZ(), 1.0f);
+        }
+        // Nobody attacks during the mechanical checks; the AI tag is tested
+        // separately below with only the tired wrestler AI-driven.
+        for (int i = 0; i < 4; ++i) match.setAiControlled(i, false);
+        match.enableTagTeams(true);
+        match.start();
+
+        check(match.tagEnabled(), "the tag rule is on");
+        check(match.isOnApron(1) && match.isOnApron(3), "one man per team starts on the apron");
+        check(!match.isOnApron(0) && !match.isOnApron(2), "one man per team starts in the ring");
+        check(!match.wrestler(1)->active && !match.wrestler(3)->active,
+              "apron wrestlers cannot be targeted");
+        check(match.partnerIndex(0) == 1 && match.partnerIndex(2) == 3, "partners are paired");
+        check(std::fabs(match.wrestler(1)->x - match.apronX(0)) < 1.0f,
+              "the apron wrestler waits at his corner");
+
+        // Walk the player to the corner and press blue.
+        Wrestler *player = match.wrestler(0);
+        player->x = match.apronX(0) + 30.0f;
+        player->z = match.apronZ();
+        player->changeState(state::IDLE, 0, match);
+        std::vector<InputFrame> inputs(4);
+        inputs[0].btn1 = true;
+        inputs[0].btn1_edge = true;
+        int tags = 0;
+        for (int step = 0; step < 6; ++step) {
+            match.update(1.0f / 60.0f, inputs);
+            for (const SimEvent &event : match.events()) {
+                if (event.type == EventType::Tag) ++tags;
+            }
+            match.clearEvents();
+            inputs[0].btn1 = false;
+            inputs[0].btn1_edge = false;
+        }
+        check(tags == 1, "the corner tag fires once");
+        check(match.isOnApron(0) && !match.isOnApron(1), "the tagger steps onto the apron");
+        check(match.wrestler(1)->active && match.wrestler(1)->region == region::IN_RING,
+              "the fresh partner climbs into the ring");
+        check(match.wrestler(0)->x > match.apronX(0) - 1.0f, "the tagger is out at the corner");
+
+        // An AI wrestler tags out on his own when he is tired and the man on
+        // the apron has more left.
+        Wrestler *tired = match.wrestler(2);
+        tired->energy = tired->energy_max * 0.2f;
+        tired->x = match.apronX(1) + 30.0f;
+        tired->z = match.apronZ();
+        tired->changeState(state::IDLE, 0, match);
+        match.setAiControlled(2, true);
+        int ai_tags = 0;
+        std::vector<InputFrame> idle(4);
+        for (int step = 0; step < 90; ++step) {
+            match.update(1.0f / 60.0f, idle);
+            for (const SimEvent &event : match.events()) {
+                if (event.type == EventType::Tag) ++ai_tags;
+            }
+            match.clearEvents();
+        }
+        match.setAiControlled(2, false);
+        std::printf("  info AI tagged out %d time(s)\n", ai_tags);
+        check(ai_tags == 1, "a tired AI wrestler tags his partner in");
+        check(match.isOnApron(2) && !match.isOnApron(3), "the AI tagger swaps with his partner");
+
+        // A team is out when both of its men are down, and then the other side
+        // wins - the same rule as 1 VS 1.
+        match.wrestler(2)->knockOut(match);
+        match.wrestler(3)->knockOut(match);
+        match.update(1.0f / 60.0f, inputs);
+        check(match.phase() == MatchPhase::Finished && match.winnerTeam() == 0,
+              "eliminating both partners wins the tag match");
+
+        // And the 2 VS 2 clock is the one from InGameTable (720 s).
+        const RuleInfo *tag = data.rule(1);
+        check(tag != nullptr && std::fabs(tag->max_match_time - 720.0f) < 0.01f,
+              "the tag match runs on the 2 VS 2 clock");
+    }
+
+    // ------------------------------------------------------------------
     std::printf("[determinism]\n");
     {
         auto play = [&](std::uint32_t seed) {

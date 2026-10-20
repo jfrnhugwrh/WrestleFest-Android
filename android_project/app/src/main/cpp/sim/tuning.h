@@ -12,6 +12,8 @@ namespace tuning {
 // --- AI beats (seconds) ------------------------------------------------------
 // Reaction beats are "base - perStrength * (strength - 1)". At strength 1 they
 // are the base; at strength 11 a wrestler reacts ~4x faster (0.30 s -> 0.07 s).
+constexpr float kTagReach = 70.0f;                  // how close the corner must be to tag
+constexpr float kTagEnergyFraction = 0.35f;         // AI tags out below this energy
 constexpr float kGrappleBeat = 0.30f;              // 0x3e99999a GrappleIdleState::onEnter
 constexpr float kReactionBeat = 0.30f;             // 0x3e99999a BeAttackedState::onEnter
 constexpr float kReactionBeatPerStrength = -0.023f;  // 0xbcbc6a7f

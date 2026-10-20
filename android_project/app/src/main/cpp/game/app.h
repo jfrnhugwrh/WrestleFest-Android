@@ -65,6 +65,7 @@ public:
 private:
     void startMatch(const WrestlerProfile *player, const WrestlerProfile *opponent);
     void startRumble(const WrestlerProfile *player, const WrestlerProfile *opponent);
+    void startTagMatch(const WrestlerProfile *player, const WrestlerProfile *opponent);
     // Shared tail of both setups: entrance staging, timers, scene change.
     void beginMatchFlow(const WrestlerProfile *player, const WrestlerProfile *opponent);
     void stepSimulation(float dt);
@@ -132,8 +133,10 @@ private:
     bool red_edge_ = false;
     bool blue_edge_ = false;
     bool paused_ = false;
-    // 0 = 1 VS 1 (rule 0), 1 = Royal Rumble (rule 2).
+    // 0 = 1 VS 1 (rule 0), 1 = Royal Rumble (rule 2), 2 = Tag (rule 1).
     int mode_ = 0;
+    // Index of the wrestler the human is driving; a tag hands it to the partner.
+    int controlled_ = 0;
     bool tap_pending_ = false;
     float tap_x_ = 0.0f;
     float tap_y_ = 0.0f;

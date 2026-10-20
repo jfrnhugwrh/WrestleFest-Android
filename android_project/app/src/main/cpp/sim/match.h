@@ -56,6 +56,21 @@ public:
     // Seconds until the next entrant walks in (0 when nobody is waiting).
     float nextEntryIn() const;
 
+    // 2 VS 2 tag rules: one wrestler of each team starts in the ring, the team
+    // mate waits on the apron and takes over when the active man tags the
+    // corner (blue button next to the partner). Enable before start().
+    void enableTagTeams(bool enabled = true) { tag_mode_ = enabled; }
+    bool tagEnabled() const { return tag_mode_; }
+    bool isOnApron(int index) const {
+        return index >= 0 && index < static_cast<int>(apron_.size()) &&
+               apron_[static_cast<std::size_t>(index)];
+    }
+    // Team mate of `index` (-1 when there is none / not a tag match).
+    int partnerIndex(int index) const;
+    // Where the apron wrestler of a team stands.
+    float apronX(int team) const;
+    float apronZ() const { return ring_.centerZ(); }
+
     // When true (default) Match rings the bell itself after a short intro beat.
     // The screen flow disables it and calls start() when its own entrance and
     // announcer beats are done.
@@ -115,6 +130,9 @@ private:
     // Moves every entrant past the starting pair to the aisle (no-op unless the
     // Rumble rule and staggered entry are both active).
     void parkLateEntrants();
+    // Tag bookkeeping: the apron man of each team, and the corner swap.
+    void setupTagTeams();
+    void tryTags(const std::vector<InputFrame> &inputs);
     bool isWaitingEntrant(int index) const;
 
     const GameData *data_ = nullptr;
@@ -141,6 +159,8 @@ private:
     int entry_initial_ = 2;
     float entry_timer_ = 0.0f;
     std::vector<int> pending_entrants_;
+    bool tag_mode_ = false;
+    std::vector<bool> apron_;
 
     // AI: one entity per wrestler, index-aligned. Entity 0 is the human unless
     // setAiControlled() is called for it.

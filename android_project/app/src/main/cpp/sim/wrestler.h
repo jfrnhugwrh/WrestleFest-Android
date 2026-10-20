@@ -36,6 +36,7 @@ enum class EventType {
     SubmissionGiveUp,
     SubmissionBroken,
     CollisionDogfight,
+    Tag,
     KnockDown,
     KnockedOut,
     Bell,

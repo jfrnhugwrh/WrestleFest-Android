@@ -38,6 +38,8 @@ void Match::configure(const GameData *data, const RingGeometry &ring, int rule_i
     entry_interval_ = 0.0f;
     entry_timer_ = 0.0f;
     pending_entrants_.clear();
+    apron_.clear();
+    tag_mode_ = false;
     referee_.setup(data, &ring_, rule_ != nullptr ? rule_->max_referee_count : 3);
 }
 
@@ -55,6 +57,7 @@ int Match::addWrestler(const WrestlerProfile *profile, int team, float x, float 
     ai_.push_back(entity);
     pending_inputs_.emplace_back();
     ai_controlled_.push_back(index != 0);  // index 0 is the human by default
+    apron_.push_back(false);
     return index;
 }
 
@@ -76,6 +79,7 @@ void Match::start() {
     // They are parked in the aisle, not targetable, so the AI never looks at a
     // wrestler who is not in the match yet.
     parkLateEntrants();
+    setupTagTeams();
     entry_timer_ = 0.0f;
 
     for (int i = 0; i < static_cast<int>(wrestlers_.size()); ++i) {
@@ -204,6 +208,9 @@ void Match::update(float dt, const std::vector<InputFrame> &inputs) {
     clock_ += dt;
     updateRumbleEntries(dt);
     updateOpponents();
+    // Tags are resolved before the actors tick so the blue press makes the
+    // swap instead of turning into a strike.
+    tryTags(inputs);
 
     if (phase_ == MatchPhase::Intro && auto_start_) {
         intro_timer_ += dt;
@@ -215,8 +222,9 @@ void Match::update(float dt, const std::vector<InputFrame> &inputs) {
     for (int i = 0; i < wrestlerCount(); ++i) {
         Wrestler *w = wrestler(i);
         if (w == nullptr) continue;
-        // An entrant still in the aisle is frozen: no ticking, no AI, no clamp.
-        if (isWaitingEntrant(i)) continue;
+        // An entrant still in the aisle and the man on the apron are frozen:
+        // no ticking, no AI, no clamp.
+        if (isWaitingEntrant(i) || isOnApron(i)) continue;
         InputFrame input;
         const bool ai_driven =
             i < static_cast<int>(ai_controlled_.size()) &&
@@ -236,7 +244,7 @@ void Match::update(float dt, const std::vector<InputFrame> &inputs) {
         for (int i = 0; i < wrestlerCount(); ++i) {
             if (i >= static_cast<int>(ai_controlled_.size())) continue;
             if (!ai_controlled_[static_cast<std::size_t>(i)]) continue;
-            if (isWaitingEntrant(i)) continue;
+            if (isWaitingEntrant(i) || isOnApron(i)) continue;
             Wrestler *w = wrestler(i);
             if (w == nullptr || w->isDead()) continue;
             InputFrame frame;
@@ -257,6 +265,97 @@ void Match::update(float dt, const std::vector<InputFrame> &inputs) {
 
     // 4. Win conditions.
     if (phase_ == MatchPhase::Running) checkWinConditions(dt);
+}
+
+int Match::partnerIndex(int index) const {
+    if (!tag_mode_) return -1;
+    const Wrestler *self = wrestler(index);
+    if (self == nullptr || (self->team != 0 && self->team != 1)) return -1;
+    for (int i = 0; i < wrestlerCount(); ++i) {
+        const Wrestler *other = wrestler(i);
+        if (other != nullptr && i != index && other->team == self->team) return i;
+    }
+    return -1;
+}
+
+float Match::apronX(int team) const {
+    // Just outside the near corner, where the aisle walk-in starts.
+    return team == 0 ? ring_.leftX(ring_.centerZ()) - 46.0f
+                     : ring_.rightX(ring_.centerZ()) + 46.0f;
+}
+
+void Match::setupTagTeams() {
+    apron_.assign(wrestlers_.size(), false);
+    if (!tag_mode_) return;
+    bool team_has_active[2] = {false, false};
+    for (int i = 0; i < wrestlerCount(); ++i) {
+        Wrestler &w = wrestlers_[static_cast<std::size_t>(i)];
+        if (w.team != 0 && w.team != 1) continue;
+        const int team = w.team;
+        if (!team_has_active[team]) {
+            team_has_active[team] = true;
+            continue;
+        }
+        // The team mate starts on the apron, frozen and untargetable.
+        apron_[static_cast<std::size_t>(i)] = true;
+        w.active = false;
+        w.x = apronX(team);
+        w.z = apronZ();
+        w.facing = team == 0 ? 1.0f : -1.0f;
+        w.region = region::RINGSIDE;
+    }
+}
+
+void Match::tryTags(const std::vector<InputFrame> &inputs) {
+    if (!tag_mode_ || phase_ != MatchPhase::Running) return;
+    for (int i = 0; i < wrestlerCount(); ++i) {
+        Wrestler *w = wrestler(i);
+        if (w == nullptr || !w->active || w->isDead() || w->play_dead) continue;
+        if (w->isBusy() || w->held || w->pinned) continue;  // no tag mid-move
+        const int partner = partnerIndex(i);
+        if (partner < 0 || !isOnApron(partner)) continue;
+        Wrestler *mate = wrestler(partner);
+        if (mate == nullptr || mate->isDead()) continue;
+        if (std::fabs(w->x - mate->x) > tuning::kTagReach ||
+            std::fabs(w->z - mate->z) > tuning::kTagReach) {
+            continue;
+        }
+
+        InputFrame frame;
+        if (i < static_cast<int>(ai_controlled_.size()) &&
+            ai_controlled_[static_cast<std::size_t>(i)]) {
+            if (i < static_cast<int>(pending_inputs_.size())) {
+                frame = pending_inputs_[static_cast<std::size_t>(i)];
+            }
+        } else if (i < static_cast<int>(inputs.size())) {
+            frame = inputs[static_cast<std::size_t>(i)];
+        }
+        if (!frame.btn1_edge) continue;
+
+        // Swap: the tagger steps onto the apron, the partner climbs in.
+        const int team = w->team;
+        w->active = false;
+        w->held = false;
+        w->x = apronX(team);
+        w->z = apronZ();
+        w->region = region::RINGSIDE;
+        w->changeState(state::IDLE, 0, *this);
+        apron_[static_cast<std::size_t>(i)] = true;
+
+        mate->active = true;
+        mate->region = region::IN_RING;
+        mate->x = ring_.clampX(ring_.centerZ(), apronX(team) + (team == 0 ? 40.0f : -40.0f));
+        mate->z = apronZ();
+        mate->facing = team == 0 ? 1.0f : -1.0f;
+        mate->changeState(state::IDLE, 0, *this);
+        apron_[static_cast<std::size_t>(partner)] = false;
+
+        // The fresh man faces the nearest enemy straight away.
+        updateOpponents();
+        emit({EventType::Announcer, partner, i, 0.0f, state::IDLE});
+        emit({EventType::Tag, partner, i, 0.0f, state::IDLE});
+        return;  // one tag per frame
+    }
 }
 
 void Match::updateGrappleBeats(float dt) {

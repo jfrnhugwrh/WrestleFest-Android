@@ -52,6 +52,8 @@ private:
     void tickGrapple(float dt, Match &match);
     void tickReaction(float dt, Match &match);
     void tickRingSide(Match &match, InputFrame *input);
+    // 2 VS 2: walk to the corner and tag out when the partner is fresher.
+    bool tickTag(Match &match, InputFrame *input);
     int partnerOf(Match &match) const;
 };
 

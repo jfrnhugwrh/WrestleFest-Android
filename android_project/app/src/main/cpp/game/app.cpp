@@ -121,6 +121,7 @@ void GameApp::startMatch(const WrestlerProfile *player, const WrestlerProfile *o
                      0x20120423u ^ static_cast<std::uint32_t>(clock_ * 1000.0f) ^ 0x9e3779b9u);
     match_.addWrestler(player, 0, ring.centerX() - 110.0f, ring.centerZ() + 20.0f, 1.0f);
     match_.addWrestler(opponent, 1, ring.centerX() + 110.0f, ring.centerZ() + 20.0f, -1.0f);
+    controlled_ = 0;
     match_.setAiControlled(0, false);  // the human
     match_.setAiControlled(1, true);
     beginMatchFlow(player, opponent);
@@ -183,9 +184,46 @@ void GameApp::startRumble(const WrestlerProfile *player, const WrestlerProfile *
         match_.addWrestler(&data_.wrestlers()[static_cast<std::size_t>(pick)], i,
                            ring.centerX() + offset, ring.centerZ(), 1.0f);
     }
+    controlled_ = 0;
     match_.setAiControlled(0, false);  // the human
     for (int i = 1; i < match_.wrestlerCount(); ++i) match_.setAiControlled(i, true);
     match_.enableStaggeredEntry(25.0f, 2);
+    beginMatchFlow(player, opponent);
+}
+
+void GameApp::startTagMatch(const WrestlerProfile *player, const WrestlerProfile *opponent) {
+    if (player == nullptr || opponent == nullptr) return;
+    const RingGeometry ring;
+    match_.configure(&data_, ring, 1,
+                     0x20120423u ^ static_cast<std::uint32_t>(clock_ * 1000.0f) ^ 0x9e3779b9u);
+
+    const int count = static_cast<int>(data_.wrestlers().size());
+    auto next_distinct = [&](int from, const std::string &a, const std::string &b,
+                             const std::string &c) {
+        for (int step = 1; step <= count; ++step) {
+            const int index = (from + step) % count;
+            const std::string &folder = data_.wrestlers()[static_cast<std::size_t>(index)].folder;
+            if (folder != a && folder != b && folder != c) return index;
+        }
+        return (from + 1) % count;
+    };
+
+    const int partner_index = next_distinct(selected_player_, player->folder, opponent->folder, "");
+    const WrestlerProfile &partner = data_.wrestlers()[static_cast<std::size_t>(partner_index)];
+    const int rival_index =
+        next_distinct(selected_opponent_, player->folder, opponent->folder, partner.folder);
+    const WrestlerProfile &rival = data_.wrestlers()[static_cast<std::size_t>(rival_index)];
+
+    // Team 0: the player and his partner. Team 1: the CPU pair. The partner
+    // waits on the apron until he is tagged in.
+    match_.addWrestler(player, 0, ring.centerX() - 120.0f, ring.centerZ() + 20.0f, 1.0f);
+    match_.addWrestler(&partner, 0, ring.centerX() - 60.0f, ring.centerZ() + 20.0f, 1.0f);
+    match_.addWrestler(opponent, 1, ring.centerX() + 120.0f, ring.centerZ() + 20.0f, -1.0f);
+    match_.addWrestler(&rival, 1, ring.centerX() + 60.0f, ring.centerZ() + 20.0f, -1.0f);
+    controlled_ = 0;
+    match_.setAiControlled(0, false);  // the human
+    for (int i = 1; i < match_.wrestlerCount(); ++i) match_.setAiControlled(i, true);
+    match_.enableTagTeams(true);
     beginMatchFlow(player, opponent);
 }
 
@@ -213,7 +251,7 @@ void GameApp::update(double frame_seconds) {
             if (count <= 1) break;
             // Mode chip, top right: taps between 1 VS 1 and the Royal Rumble.
             if (y > 14.0f && y < 62.0f && x > 660.0f && x < 946.0f) {
-                mode_ = (mode_ + 1) % 2;
+                mode_ = (mode_ + 1) % 3;
                 break;
             }
             const bool on_fight = y > 480.0f && x > 60.0f && x < 900.0f;
@@ -224,6 +262,8 @@ void GameApp::update(double frame_seconds) {
                     data_.wrestlers()[static_cast<std::size_t>(selected_opponent_)];
                 if (mode_ == 1) {
                     startRumble(&player, &opponent);
+                } else if (mode_ == 2) {
+                    startTagMatch(&player, &opponent);
                 } else {
                     startMatch(&player, &opponent);
                 }
@@ -259,15 +299,16 @@ void GameApp::update(double frame_seconds) {
             accumulator_ += frame_seconds;
             int steps = 0;
             while (accumulator_ >= tuning::kFixedDelta && steps < tuning::kMaxStepsPerFrame) {
-                inputs_[0] = InputFrame{};
-                inputs_[0].left = stick_dir_x_ <= -kStickDeadzone;
-                inputs_[0].right = stick_dir_x_ >= kStickDeadzone;
-                inputs_[0].up = stick_dir_y_ <= -kStickDeadzone;
-                inputs_[0].down = stick_dir_y_ >= kStickDeadzone;
-                inputs_[0].btn0 = red_down_;
-                inputs_[0].btn1 = blue_down_;
-                inputs_[0].btn0_edge = red_edge_;
-                inputs_[0].btn1_edge = blue_edge_;
+                for (InputFrame &frame : inputs_) frame = InputFrame{};
+                InputFrame &human = inputs_[static_cast<std::size_t>(controlled_)];
+                human.left = stick_dir_x_ <= -kStickDeadzone;
+                human.right = stick_dir_x_ >= kStickDeadzone;
+                human.up = stick_dir_y_ <= -kStickDeadzone;
+                human.down = stick_dir_y_ >= kStickDeadzone;
+                human.btn0 = red_down_;
+                human.btn1 = blue_down_;
+                human.btn0_edge = red_edge_;
+                human.btn1_edge = blue_edge_;
                 red_edge_ = false;
                 blue_edge_ = false;
                 stepSimulation(tuning::kFixedDelta);
@@ -403,6 +444,17 @@ void GameApp::stepSimulation(float dt) {
                 break;
             case EventType::Victory:
                 playRandomCue(kCrowdCues, 2, "crowd");
+                break;
+            case EventType::Tag:
+                playCue("audio/sfx/Attack01.wav");
+                // Control follows the man the player tagged in.
+                if (event.other == controlled_ && event.actor >= 0) {
+                    match_.setAiControlled(controlled_, true);
+                    controlled_ = event.actor;
+                    match_.setAiControlled(controlled_, false);
+                    stick_dir_x_ = stick_dir_y_ = 0.0f;
+                    red_edge_ = blue_edge_ = false;
+                }
                 break;
             case EventType::Taunt:
                 playRandomCue(kEffortCues, 3, "effort");
@@ -592,10 +644,11 @@ void GameApp::drawSelect() {
 
     // Rule chip: 1 VS 1 or the Royal Rumble, straight from InGameTable.
     {
-        const char *label = mode_ == 1 ? "ROYAL RUMBLE" : "1 VS 1";
-        const bool rumble = mode_ == 1;
+        const char *label = mode_ == 0 ? "1 VS 1" : (mode_ == 1 ? "ROYAL RUMBLE" : "TAG TEAM");
         batch.draw(renderer_.white(), 664.0f, 18.0f, 278.0f, 40.0f,
-                   rumble ? Color{0.55f, 0.14f, 0.1f, 0.95f} : Color{0.12f, 0.2f, 0.36f, 0.95f});
+                   mode_ == 1 ? Color{0.55f, 0.14f, 0.1f, 0.95f}
+                              : (mode_ == 2 ? Color{0.12f, 0.4f, 0.22f, 0.95f}
+                                            : Color{0.12f, 0.2f, 0.36f, 0.95f}));
         renderer_.drawTextCentered(label, 803.0f, 30.0f, 0.5f, Color{1.0f, 0.9f, 0.65f, 1.0f});
     }
 

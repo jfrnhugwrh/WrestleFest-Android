@@ -589,6 +589,22 @@ void GameRenderer::drawHud(const Match &match, int player_index) {
         }
     }
 
+    // 2 VS 2: a green TAG! prompt once the corner is within reach.
+    if (match.tagEnabled()) {
+        for (int i = 0; i < count; ++i) {
+            const Wrestler *w = match.wrestler(i);
+            if (w == nullptr || !w->active || w->isDead() || w->isBusy()) continue;
+            const int partner = match.partnerIndex(i);
+            if (partner < 0 || !match.isOnApron(partner)) continue;
+            const Wrestler *mate = match.wrestler(partner);
+            if (mate == nullptr || mate->isDead()) continue;
+            if (std::fabs(w->x - mate->x) < tuning::kTagReach &&
+                std::fabs(w->z - mate->z) < tuning::kTagReach) {
+                drawTextCentered("TAG!", 480.0f, 300.0f, 0.95f, Color{0.35f, 1.0f, 0.45f, 1.0f});
+            }
+        }
+    }
+
     // Referee count, big and centred, while a pin is being counted.
     if (match.referee().counting()) {
         const int value = match.referee().count();

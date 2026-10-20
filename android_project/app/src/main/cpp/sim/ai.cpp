@@ -208,6 +208,28 @@ void AiEntity::tickAttack(float dt, Match &match, InputFrame *input) {
     }
 }
 
+bool AiEntity::tickTag(Match &match, InputFrame *input) {
+    Wrestler *self = match.wrestler(actor);
+    if (self == nullptr || !match.tagEnabled() || !self->active || self->isBusy()) return false;
+    const int mate_index = match.partnerIndex(actor);
+    if (mate_index < 0 || !match.isOnApron(mate_index)) return false;
+    Wrestler *mate = match.wrestler(mate_index);
+    if (mate == nullptr || mate->isDead()) return false;
+
+    // Only tag out when tired and the man on the apron has more left.
+    const float mine = self->energyFraction();
+    if (mine > tuning::kTagEnergyFraction || mate->energyFraction() < mine + 0.15f) return false;
+
+    const float dx = mate->x - self->x;
+    const float dz = mate->z - self->z;
+    stickToward(input, dx, dz);
+    if (std::fabs(dx) < tuning::kTagReach * 0.8f && std::fabs(dz) < tuning::kTagReach * 0.8f) {
+        input->btn1 = true;
+        input->btn1_edge = true;
+    }
+    return true;
+}
+
 void AiEntity::tickRingSide(Match &match, InputFrame *input) {
     Wrestler *self = match.wrestler(actor);
     if (self == nullptr) return;
@@ -239,6 +261,9 @@ void AiEntity::tick(float dt, Match &match, InputFrame *input) {
 
     timer += dt;
     if (attack_delay > 0.0f) attack_delay -= dt;
+
+    // A tired tag wrestler heads for his corner before anything else.
+    if (tickTag(match, input)) return;
 
     // The routing switch of GAMEPLAY_IMPLEMENTATION 5.2 - re-derived every tick.
     if (self->held) {

@@ -42,7 +42,7 @@ Verified by `sim_test`: reaction beats, the 51/101 grapple roll (and the
 ~94.6 % Rumble variant), the ghost bar rate, a full AI-vs-AI 1v1 to a decision
 (360 s, ~600 hits, 2 pins), a looping animation clock, and seed determinism.
 
-## Phase 3 - Rules, referee, AI (done for 1v1, rumble tested)
+## Phase 3 - Rules, referee, AI (done for 1v1, tag and rumble)
 
 `sim/match.*` owns the frame order of the original (actors, then AI, then
 referee/counts, then the win check), the opponent targeting, the pin gate and
@@ -50,7 +50,14 @@ cooldown, the outside count, the rule timer/decision, and the Royal Rumble
 toss-out + last-man-standing win condition. The Rumble also staggers its
 entrants: `enableStaggeredEntry(interval, initial)` parks everyone past the
 first pair in the aisle (off camera, not targetable, not ticked) and walks them
-in one at a time; the win check stays closed until the aisle is empty. `sim/referee.*` runs the four master
+in one at a time; the win check stays closed until the aisle is empty.
+
+2 VS 2 tag rules (`enableTagTeams`): the second man of each team waits on the
+apron (frozen, untargetable), and the active wrestler swaps him in with the blue
+button next to the corner; the simulation resolves tags before the actors tick,
+so the press is a tag and not a strike. The AI tags out on its own once its
+energy drops under 35 % and the apron man has more left. The team is out when
+both of its men are down, which is the existing team win check. `sim/referee.*` runs the four master
 states and the pin/give-up/tag sub-states. `sim/ai.*` implements the twelve AI
 states with the reaction beats from `tuning.h`.
 
@@ -101,7 +108,7 @@ Road to WrestleMania, shop, crowd reactions, replays.
    standing in the ring; the Rumble aisle walk-in is in place, so the same path
    can be reused for the entrance walk; `EntranceInfo.anims` and `WalkFactor`
    are loaded and ready to drive it.
-3. Tag-team rules: `Match` is team-aware, but the tag-in/tag-out AI routing is
-   not written yet.
+3. Tag corners: the tag works from the apron spot, but there is no corner-post
+   art or a climb-in animation yet (`CLIMB*` states exist in the table).
 4. Music: `audio/Music` is untouched; `AudioPlayer` handles WAV only.
 5. Report screen and profile/save data.
