@@ -207,12 +207,25 @@ int main(int argc, char **argv) {
     const std::string assets = argc > 1 ? argv[1] : "android_project/app/src/main/assets";
     const std::string out = argc > 2 ? argv[2] : "/tmp/preview.png";
 
+    // An optional trailing --arena=<FolderName> renders another venue; every
+    // arena0.png is 1482x678-679, so the shared calibration holds.
+    std::string arena_folder = "ARENA02";
+    std::vector<std::string> wrestler_folders;
+    for (int i = 3; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg.rfind("--arena=", 0) == 0) {
+            arena_folder = arg.substr(8);
+        } else {
+            wrestler_folders.push_back(arg);
+        }
+    }
+
     Canvas canvas;
     canvas.fill(5, 5, 8, 255);
 
     std::vector<std::uint8_t> bytes;
     Image crowd;
-    if (readFile(assets + "/graphics/Sprites/Arena/ARENA02/ground.png", &bytes) &&
+    if (readFile(assets + "/graphics/Sprites/Arena/" + arena_folder + "/ground.png", &bytes) &&
         decodePng(bytes.data(), bytes.size(), &crowd)) {
         // The crowd/floor sheet is the backdrop behind the ring; its bottom edge
         // is aligned with the bottom of the logical canvas.
@@ -222,7 +235,7 @@ int main(int argc, char **argv) {
     }
     Image arena;
     bytes.clear();
-    if (readFile(assets + "/graphics/Sprites/Arena/ARENA02/arena0.png", &bytes) &&
+    if (readFile(assets + "/graphics/Sprites/Arena/" + arena_folder + "/arena0.png", &bytes) &&
         decodePng(bytes.data(), bytes.size(), &arena)) {
         canvas.blit(arena.rgba, arena.width, arena.height, kOriginX, kOriginY,
                     arena.width * kArtScale, arena.height * kArtScale, false);
@@ -241,11 +254,12 @@ int main(int argc, char **argv) {
 
     const RingGeometry ring;
     std::vector<Actor> actors;
-    const int extra = argc - 3;
+    const int extra = static_cast<int>(wrestler_folders.size());
     for (int i = 0; i < 2; ++i) {
         Actor actor;
-        actor.profile = data.wrestlerByFolder(i < extra ? argv[3 + i] : (i == 0 ? "00_John Cena"
-                                                                              : "03_BigShow"));
+        actor.profile = data.wrestlerByFolder(i < extra ? wrestler_folders[static_cast<std::size_t>(i)]
+                                                        : (i == 0 ? "00_John Cena"
+                                                                  : "03_BigShow"));
         if (actor.profile == nullptr) continue;
         actor.frame = "idle.sst";
         actor.x = ring.centerX() + (i == 0 ? -110.0f : 110.0f);
@@ -324,7 +338,7 @@ int main(int argc, char **argv) {
 
     Image ropes;
     bytes.clear();
-    if (readFile(assets + "/graphics/Sprites/Arena/ARENA02/ropes0_bottom.png", &bytes) &&
+    if (readFile(assets + "/graphics/Sprites/Arena/" + arena_folder + "/ropes0_bottom.png", &bytes) &&
         decodePng(bytes.data(), bytes.size(), &ropes)) {
         const float width = ropes.width * kArtScale;
         const float height = ropes.height * kArtScale;
