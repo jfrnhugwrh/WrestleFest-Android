@@ -251,6 +251,14 @@ void Match::update(float dt, const std::vector<InputFrame> &inputs) {
             input = inputs[static_cast<std::size_t>(i)];
         }
         w->tick(dt, *this, input);
+        // Keep all in-ring states on the inside of the sloped rope plane. Most
+        // movement clamps locally, but paired move offsets and rebound states
+        // can also displace actors; this final sweep prevents a frame of rope
+        // penetration without affecting rumble eliminations or apron actors.
+        if (w->region == region::IN_RING || w->region == region::IN_RING_ALONE) {
+            w->z = ring_.clampZ(w->z);
+            w->x = ring_.clampX(w->z, w->x);
+        }
     }
 
     // 2. AI writes the inputs for the next frame.

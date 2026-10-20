@@ -87,7 +87,9 @@ bool decodePng(const std::uint8_t *data, std::size_t size, Image *out) {
             break;
         }
     }
-    if (width == 0 || height == 0 || bit_depth != 8 || interlace != 0) return false;
+    if (width == 0 || height == 0 || (bit_depth != 8 && bit_depth != 16) || interlace != 0) {
+        return false;
+    }
 
     int channels = 0;
     switch (colour_type) {
@@ -99,13 +101,19 @@ bool decodePng(const std::uint8_t *data, std::size_t size, Image *out) {
         default: return false;
     }
 
-    const std::size_t stride = static_cast<std::size_t>(width) * channels;
+    // Indexed-color PNGs only use 8-bit samples; 16-bit RGB/RGBA PNGs are
+    // common in the older DLC arenas and are reduced to their high byte when
+    // uploading to the game's 8-bit RGBA textures.
+    if (colour_type == 3 && bit_depth != 8) return false;
+    const std::size_t bytes_per_sample = bit_depth == 16 ? 2U : 1U;
+    const std::size_t stride = static_cast<std::size_t>(width) * channels * bytes_per_sample;
     std::vector<std::uint8_t> raw;
     if (!inflateAll(idat.data(), idat.size(), &raw, (stride + 1) * height)) return false;
 
-    // Un-filter.
+    // Un-filter using the source pixel width (including both bytes of 16-bit
+    // samples), then convert to 8-bit RGBA below.
     std::vector<std::uint8_t> pixels(stride * height);
-    const std::size_t bpp = static_cast<std::size_t>(channels);
+    const std::size_t bpp = static_cast<std::size_t>(channels) * bytes_per_sample;
     for (std::uint32_t y = 0; y < height; ++y) {
         const int filter = raw[y * (stride + 1)];
         const std::uint8_t *src = raw.data() + y * (stride + 1) + 1;
@@ -135,22 +143,28 @@ bool decodePng(const std::uint8_t *data, std::size_t size, Image *out) {
     for (std::uint32_t y = 0; y < height; ++y) {
         for (std::uint32_t x = 0; x < width; ++x) {
             std::uint8_t *dst = out->rgba.data() + (static_cast<std::size_t>(y) * width + x) * 4;
-            const std::uint8_t *src = pixels.data() + y * stride + x * channels;
+            const std::uint8_t *src =
+                pixels.data() + y * stride + x * channels * bytes_per_sample;
+            auto sample = [src, bytes_per_sample](int channel) {
+                // PNG 16-bit samples are network byte order. Keeping the most
+                // significant byte gives a fast, deterministic 8-bit preview.
+                return src[static_cast<std::size_t>(channel) * bytes_per_sample];
+            };
             if (colour_type == 3) {
-                const std::size_t index = src[0];
+                const std::size_t index = sample(0);
                 if ((index + 1) * 3 > palette.size() && !palette_has_alpha) return false;
                 dst[0] = palette[index * (palette_has_alpha ? 4 : 3) + 0];
                 dst[1] = palette[index * (palette_has_alpha ? 4 : 3) + 1];
                 dst[2] = palette[index * (palette_has_alpha ? 4 : 3) + 2];
                 dst[3] = palette_has_alpha ? palette[index * 4 + 3] : 255;
             } else if (colour_type == 0 || colour_type == 4) {
-                dst[0] = dst[1] = dst[2] = src[0];
-                dst[3] = channels == 2 ? src[1] : 255;
+                dst[0] = dst[1] = dst[2] = sample(0);
+                dst[3] = channels == 2 ? sample(1) : 255;
             } else {
-                dst[0] = src[0];
-                dst[1] = src[1];
-                dst[2] = src[2];
-                dst[3] = channels == 4 ? src[3] : 255;
+                dst[0] = sample(0);
+                dst[1] = sample(1);
+                dst[2] = sample(2);
+                dst[3] = channels == 4 ? sample(3) : 255;
             }
         }
     }

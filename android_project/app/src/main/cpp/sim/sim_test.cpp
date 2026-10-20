@@ -149,6 +149,18 @@ int main(int argc, char **argv) {
         std::vector<InputFrame> inputs(2);
         match.allowAutoStart(false);
         match.playEntrance();
+        const Wrestler *entrance_cena = match.wrestler(0);
+        const WrestlerProfile *cena_profile = data.wrestlerByFolder("00_John Cena");
+        const SpriteEntry *entrance_sprite =
+            entrance_cena != nullptr && cena_profile != nullptr
+                ? cena_profile->spriteFor(entrance_cena->spriteId())
+                : nullptr;
+        check(entrance_cena != nullptr && cena_profile != nullptr &&
+                  !cena_profile->entrance.anims.empty() &&
+                  entrance_cena->animId() == cena_profile->entrance.anims.front(),
+              "entrance selects the wrestler-specific EntranceInfo animation");
+        check(entrance_sprite != nullptr && entrance_sprite->name != "none_sprite.sst",
+              "Cena entrance never renders the none-sprite placeholder");
         for (int i = 0; i < 60; ++i) match.update(1.0f / 60.0f, inputs);
         check(match.wrestler(0)->subState() == state::ENTRANCE, "entrance holds the wrestler");
         check(match.phase() == MatchPhase::Intro, "no bell before start()");
@@ -179,6 +191,21 @@ int main(int argc, char **argv) {
         check(ring.rightX(ring.bottom_z) - ring.leftX(ring.bottom_z) >
                   ring.rightX(ring.top_z) - ring.leftX(ring.top_z),
               "ring widens towards the camera");
+
+        Match edge_match;
+        edge_match.configure(&data, ring, 0, 0x123u);
+        edge_match.addWrestler(data.wrestlerByFolder("00_John Cena"), 0,
+                               ring.leftX(ring.centerZ()) + 1.0f, ring.centerZ(), -1.0f);
+        edge_match.addWrestler(data.wrestlerByFolder("00_Randy Orton"), 1,
+                               ring.rightX(ring.centerZ()) - 1.0f, ring.centerZ(), 1.0f);
+        edge_match.setAiControlled(0, false);
+        edge_match.start();
+        std::vector<InputFrame> edge_inputs(2);
+        edge_inputs[0].left = true;
+        for (int i = 0; i < 90; ++i) edge_match.update(1.0f / 60.0f, edge_inputs);
+        const Wrestler *at_rope = edge_match.wrestler(0);
+        check(at_rope != nullptr && at_rope->x >= ring.leftX(at_rope->z),
+              "ring boundary sweep prevents a wrestler crossing the rope");
     }
 
     // ------------------------------------------------------------------

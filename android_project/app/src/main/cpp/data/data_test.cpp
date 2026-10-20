@@ -125,6 +125,16 @@ void testTables(const std::string &assets) {
     check(data.rules().size() == 5, "InGameTable has 5 rule sets");
     check(data.wrestlers().size() == 38, "38 wrestlers loaded from disk");
     check(!data.arenas().empty(), "arena table loaded");
+    auto has_arena = [&data](const char *name, const char *folder) {
+        for (const ArenaInfo &arena : data.arenas()) {
+            if (arena.name == name && arena.folder == folder) return true;
+        }
+        return false;
+    };
+    check(has_arena("Old Survivor Series Arena", "ARENA08"),
+          "Old Survivor Series resolves to ARENA08");
+    check(has_arena("WrestleMania-27", "ARENA09"),
+          "WrestleMania 27 resolves to ARENA09");
 
     // Rule set 0 is the 1VS1 match: six minutes, 20 counts outside.
     const RuleInfo *one_on_one = data.rule(0);
