@@ -215,6 +215,9 @@ void processInput(android_app* app, Renderer* renderer, AudioPlayer* audio) {
     for (uint64_t i = 0; i < input->motionEventsCount; ++i) {
         const GameActivityMotionEvent& event = input->motionEvents[i];
         const int action = event.action & AMOTION_EVENT_ACTION_MASK;
+        const int pointerIndex =
+            (event.action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK) >>
+            AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT;
         for (uint32_t p = 0; p < event.pointerCount; ++p) {
             const GameActivityPointerAxes& pointer = event.pointers[p];
             const int id = pointer.id;
@@ -225,7 +228,7 @@ void processInput(android_app* app, Renderer* renderer, AudioPlayer* audio) {
             switch (action) {
                 case AMOTION_EVENT_ACTION_DOWN:
                 case AMOTION_EVENT_ACTION_POINTER_DOWN:
-                    if (p == event.actionIndex) {
+                    if (static_cast<int>(p) == pointerIndex) {
                         renderer->touchDown(id, x, y);
                         if (audio != nullptr) audio->play();
                     }
@@ -235,7 +238,7 @@ void processInput(android_app* app, Renderer* renderer, AudioPlayer* audio) {
                     break;
                 case AMOTION_EVENT_ACTION_UP:
                 case AMOTION_EVENT_ACTION_POINTER_UP:
-                    if (p == event.actionIndex) {
+                    if (static_cast<int>(p) == pointerIndex) {
                         renderer->touchUp(id);
                     }
                     break;
