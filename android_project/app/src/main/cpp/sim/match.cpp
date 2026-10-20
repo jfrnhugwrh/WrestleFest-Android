@@ -364,6 +364,15 @@ void Match::tryTags(const std::vector<InputFrame> &inputs) {
         mate->changeState(state::IDLE, 0, *this);
         apron_[static_cast<std::size_t>(partner)] = false;
 
+        // Drop the stale press that made the tag, otherwise the fresh man is
+        // still holding blue on his first frame and tags straight back.
+        if (i < static_cast<int>(pending_inputs_.size())) {
+            pending_inputs_[static_cast<std::size_t>(i)].btn1_edge = false;
+        }
+        if (partner < static_cast<int>(pending_inputs_.size())) {
+            pending_inputs_[static_cast<std::size_t>(partner)].btn1_edge = false;
+        }
+
         // The fresh man faces the nearest enemy straight away.
         updateOpponents();
         emit({EventType::Announcer, partner, i, 0.0f, state::IDLE});

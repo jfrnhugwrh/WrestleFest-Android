@@ -45,10 +45,16 @@ void AiEntity::setState(AiState next, Match &match) {
     state = next;
     timer = 0.0f;
     switch (next) {
-        case AiState::BeAttacked:
-            // 0.30 - 0.023 * (strength - 1)
-            beat = std::max(0.02f, tuning::kReactionBeat);
+        case AiState::BeAttacked: {
+            // 0.30 - 0.023 * (strength - 1): stronger wrestlers recover faster.
+            const Wrestler *self = match.wrestler(actor);
+            const float strength = self != nullptr && self->profile() != nullptr
+                                       ? static_cast<float>(self->profile()->strength())
+                                       : 1.0f;
+            beat = std::max(0.02f, tuning::kReactionBeat +
+                                       tuning::kReactionBeatPerStrength * (strength - 1.0f));
             break;
+        }
         case AiState::BeHeld:
             beat = tuning::kHeldBeat;
             break;
