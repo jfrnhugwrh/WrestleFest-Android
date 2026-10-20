@@ -307,6 +307,58 @@ bool ObbArchive::open(const std::string &path)
     return true;
 }
 
+std::uint64_t ObbArchive::entrySize(const std::string &entry_path) const
+{
+    const std::string key = findKey(entry_path);
+    if (key.empty())
+    {
+        return 0;
+    }
+    return entries_.at(key).uncompressed_size;
+}
+
+bool ObbArchive::readRange(const std::string &entry_path, std::uint64_t offset, std::size_t length,
+                           std::uint8_t *destination) const
+{
+    if (destination == nullptr || length == 0)
+    {
+        return true;
+    }
+    const std::string key = findKey(entry_path);
+    if (key.empty())
+    {
+        return false;
+    }
+    const ZipEntryInfo &entry = entries_.at(key);
+    // Range reads are only meaningful for stored entries (the .obb is written
+    // that way); compressed entries have to be read whole.
+    if (entry.compression_method != 0 || offset + length > entry.uncompressed_size)
+    {
+        return false;
+    }
+
+    std::FILE *file = std::fopen(file_path_.c_str(), "rb");
+    if (file == nullptr)
+    {
+        return false;
+    }
+    std::uint8_t local_header[30];
+    bool ok = seekFile(file, static_cast<std::int64_t>(entry.local_header_offset), SEEK_SET) == 0 &&
+              std::fread(local_header, 1, sizeof(local_header), file) == sizeof(local_header) &&
+              readU32(local_header) == kLocalHeaderSignature;
+    if (ok)
+    {
+        const std::uint16_t fn_len = readU16(local_header + 26);
+        const std::uint16_t extra_len = readU16(local_header + 28);
+        const std::int64_t data_offset = static_cast<std::int64_t>(entry.local_header_offset) + 30 +
+                                         fn_len + extra_len + static_cast<std::int64_t>(offset);
+        ok = seekFile(file, data_offset, SEEK_SET) == 0 &&
+             std::fread(destination, 1, length, file) == length;
+    }
+    std::fclose(file);
+    return ok;
+}
+
 bool ObbArchive::readFile(const std::string &entry_path, std::vector<std::uint8_t> *bytes)
 {
     if (bytes == nullptr || !isOpen())

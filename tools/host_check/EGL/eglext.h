@@ -1,0 +1,4 @@
+#ifndef WRESTLEFEST_HOST_STUB_EGLEXT
+#define WRESTLEFEST_HOST_STUB_EGLEXT
+#include <EGL/egl.h>
+#endif

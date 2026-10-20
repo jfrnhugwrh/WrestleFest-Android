@@ -33,6 +33,11 @@ public:
 
     bool hasEntry(const std::string& entry_path) const;
     bool readFile(const std::string& entry_path, std::vector<std::uint8_t>* bytes);
+    // Size of an entry in bytes (0 when unknown).
+    std::uint64_t entrySize(const std::string& entry_path) const;
+    // Reads `length` bytes at `offset` inside an entry.
+    bool readRange(const std::string& entry_path, std::uint64_t offset, std::size_t length,
+                   std::uint8_t* destination) const;
 
     static std::string normalizeKey(const std::string& path);
 

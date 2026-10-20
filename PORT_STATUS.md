@@ -1,0 +1,130 @@
+# Port status
+
+How the code in `android_project/app/src/main/cpp/` maps onto the phases in
+`GAMEPLAY_IMPLEMENTATION.md`, what is verified, and what is still open.
+
+Run the host tests with:
+
+```
+tools/host_check/tests.sh     # data_test, sim_test, image_test
+tools/host_check/check.sh     # syntax-check every NDK-only translation unit
+tools/preview/preview <assets> <out.png>   # software composite of the in-ring view
+```
+
+## Phase 1 - Data layer (done)
+
+`data/sml_parser.*` reads the SML tag stream (multiple top-level arrays, `TYPEAn`
+vector fields, quoted strings, the `-1s` suffix junk the exporter emits).
+`data/game_data.*` binds every table the simulation needs: `StateTable` (117),
+`WrestlerAT` (269), `WrestleStyleList` (95), the nine `WSTable` families,
+`InGameTable` (5 rules), `CommonVariableInfo`, `CommonDamageInfo`,
+`ButtonCountTable`, `AllArenaTable`, and per wrestler `BaseInfo`,
+`SuperStarWSTable`, `wrestlerData`, `SFXTable` and `EntranceInfo`.
+
+Verified by `data_test`: row counts, spot values (PUNCH range 110, Cena's
+second throw, HealEPS 1.4), the mash goals, and the `.tyF` font descriptor
+(Header + 256 CharTable rows).
+
+## Phase 2 - Headless simulation (done)
+
+The clinch resolves through the beat roll in `Match::updateGrappleBeats` for
+`GRAPPLE_IDLE` as well as the high/low stances: a button press only brings the
+next beat forward (`kGrappleMashStep`), it no longer wins the exchange. The
+original's 300 px rope force is measured in its own (wider) ring space; at the
+960x640 logical scale it would cover the whole trapezoid and make every clinch
+an automatic win, so it is clamped to 90 px (`tuning.h` documents this).
+
+An empty energy bar is a loss (`Match::checkExhausted`): without it a wrestler
+drained to zero can sit in `STAND_TIRED` forever - a Rumble cannot pin him, so
+the match would never end. This was the reason six-man Rumbles used to run
+until the test cap without a winner; they now play out in ~3-4 minutes.
+
+`sim/actor.h` is `CActor` (x/y/z, facing, the 4-deep state stack, energy,
+energy_display ghost bar, motion power, power-up). `sim/wrestler.cpp` is
+`CWrestler`: `changeState` with the chain flag, `OpponentState` pairing,
+`Facing`/`xOffset` snapping, the input-driven locomotion, strikes, grapples,
+dogfights, whips, ground game, pins, submissions, and the animation clock with
+looping locomotion states.
+
+`sim/collision.*` holds the trapezoid ring and the `CollisionRangeX` /
+`CollisionRangeZ` model. Ranges now come from `StateTable` through
+`Wrestler::collisionRange()`; only the documented fallbacks remain literals.
+
+Verified by `sim_test`: reaction beats, the 51/101 grapple roll (and the
+~94.6 % Rumble variant), the ghost bar rate, a full AI-vs-AI 1v1 to a decision
+(360 s, ~600 hits, 2 pins), a looping animation clock, and seed determinism.
+
+## Phase 3 - Rules, referee, AI (done for 1v1, tag and rumble)
+
+`sim/match.*` owns the frame order of the original (actors, then AI, then
+referee/counts, then the win check), the opponent targeting, the pin gate and
+cooldown, the outside count, the rule timer/decision, and the Royal Rumble
+toss-out (the loser of a clinch at the ropes) + last-man-standing win
+condition. The Rumble also staggers its
+entrants: `enableStaggeredEntry(interval, initial)` parks everyone past the
+first pair in the aisle (off camera, not targetable, not ticked) and walks them
+in one at a time; the win check stays closed until the aisle is empty.
+
+2 VS 2 tag rules (`enableTagTeams`): the second man of each team waits on the
+apron (frozen, untargetable), and the active wrestler swaps him in with the blue
+button next to the corner; the simulation resolves tags before the actors tick,
+so the press is a tag and not a strike. The AI tags out on its own once its
+energy drops under 35 % and the apron man has more left. The team is out when
+both of its men are down, which is the existing team win check. `sim/referee.*` runs the four master
+states and the pin/give-up/tag sub-states. `sim/ai.*` implements the twelve AI
+states with the reaction beats from `tuning.h`.
+
+Verified by `sim_test`: entrance staging, the rumble rule and its toss-out,
+pins, the full match, the power-up meter, exhaustion, the tag rules and a
+six-man Rumble played to a winner.
+
+## Phase 4 - Renderer (implemented, needs a device for the final check)
+
+`render/image.cpp` decodes PNG and `.sst` (palette at +20, indices at +276,
+RGBA4444/RGB565 palettes), `render/zip_reader.cpp` reads the bundle zips (both
+whole-buffer and streaming via a range reader), `render/gl_sprite.cpp` is the
+GLES3 sprite batch + palette shader + `tyF` bitmap font, `game/game_renderer.cpp`
+draws the arena (crowd sheet, ring, front ropes), depth-sorted wrestlers with
+shadows and the power-up palette blink, the referee, and the HUD (energy bars
+with the ghost drain, names, timer, referee count, mash prompt).
+
+Verified on the host: 101,422 animation frames across 38 bundles all resolve to
+sprite files that exist and decode; arena/HUD/font art decodes; the font UVs
+sample ink where the glyphs are; the streaming zip path matches the in-memory
+one; `tools/preview` composites the ring view (scale 0.72, origin
+`480 - 742*0.72, 560 - 430*0.72`) and shows the wrestlers standing correctly on
+the mat. What cannot be checked here is the GL upload/draw itself - that needs
+the APK on a device.
+
+## Phase 5 - Screens and flow (first pass)
+
+`game/app.*` runs Title -> Select -> Entrance/announcer/bell -> Match ->
+Result, with the shipped front-end art (the post-match screen uses
+`ui/Sprites/UI/report/frame.png` - winner portrait, name, match time and the
+score the wrestler earned from his status slots), the virtual pad from the control sheet
+(d-pad bottom left, blue and red buttons on the right, pause button), a pause
+menu (`ui/Sprites/UI/pause/`) that freezes the sim, a rule chip on the select
+screen (1 VS 1 / Royal Rumble, six entrants with staggered entry and a HUD
+countdown), and event-driven audio cues through `AudioPlayer::playAsset`.
+
+Still open: arena selection and tag-team selection, the post-match report (`Score` values
+from `SuperStarWSTable`), entrances walking in from the stage, tag and rumble
+flow in the UI, music streaming, and save/profile.
+
+## Phase 6 - Modes and polish (open)
+
+Tag flow, Gauntlet,
+Road to WrestleMania, shop, crowd reactions, replays.
+
+## Known gaps / next steps
+
+1. Device check of the renderer (this sandbox has no GPU): confirm the arena
+   placement, the palette shader and the HUD on real hardware.
+2. Entrance walk-in: `playEntrance()` currently plays the `ENTRANCE` animation
+   standing in the ring; the Rumble aisle walk-in is in place, so the same path
+   can be reused for the entrance walk; `EntranceInfo.anims` and `WalkFactor`
+   are loaded and ready to drive it.
+3. Tag corners: the tag works from the apron spot, but there is no corner-post
+   art or a climb-in animation yet (`CLIMB*` states exist in the table).
+4. Music: `audio/Music` is untouched; `AudioPlayer` handles WAV only.
+5. Report screen and profile/save data.
