@@ -76,6 +76,19 @@ void testPng(const std::string &assets) {
         ++g_failures;
     }
 
+    // These DLC arenas previously failed to replace the default arena. Check
+    // every layer required by GameRenderer (the shadow is optional for ARENA09).
+    for (const char *folder : {"ARENA08", "ARENA09"}) {
+        for (const char *layer : {"ground.png", "arena0.png", "ropes0_bottom.png"}) {
+            const std::string path = assets + "/graphics/Sprites/Arena/" + folder + "/" + layer;
+            std::vector<std::uint8_t> layer_bytes;
+            Image layer_image;
+            check(readFile(path, &layer_bytes) &&
+                      decodePng(layer_bytes.data(), layer_bytes.size(), &layer_image),
+                  std::string(folder) + "/" + layer + " loads");
+        }
+    }
+
     // The HUD energy bar is a small RGBA PNG; make sure the decoder handles a
     // second colour type as well.
     Image bar;

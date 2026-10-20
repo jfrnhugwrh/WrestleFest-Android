@@ -36,6 +36,11 @@ constexpr int kGrappleWinRollThreshold = 49;       // cmp 0x31 -> win when roll 
 constexpr int kGrappleWinRollRumble = 90;          // cmp 0x5a -> win when roll < 90
 
 // --- Movement ---------------------------------------------------------------
+// Keep the original 30 fps animation clock, but run the match simulation at a
+// slightly gentler pace on touch devices. This scales the full gameplay clock
+// (movement, reactions, and match timer) consistently instead of making only
+// movement feel sluggish.
+constexpr float kGameSpeedScale = 0.78f;
 // HandleAutoWalk clamps a step to 20 px per *frame* at 30 fps = 600 px/s; the
 // per-wrestler WalkFactorX/RunFactorX values are the real limiter.
 constexpr float kMaxWalkStepPerSecond = 600.0f;

@@ -100,38 +100,50 @@ void GameRenderer::shutdown() {
 }
 
 bool GameRenderer::loadArena(const std::string &folder) {
-    auto load = [&](const char *file, Texture *out) {
+    // Build a complete replacement before touching the currently visible arena.
+    // This is important for DLC arenas: some omit optional layers (notably the
+    // contact shadow), and a failed/partial load must not blank the whole ring.
+    ArenaAssets candidate;
+    auto load = [&](const char *file, Texture *out, bool required) {
         std::vector<std::uint8_t> bytes;
         const std::string path = "graphics/Sprites/Arena/" + folder + "/" + file;
-        if (assets_ == nullptr || !assets_->readAsset(path, &bytes)) return false;
+        if (assets_ == nullptr || !assets_->readAsset(path, &bytes)) return !required;
         Image image;
-        if (!decodePng(bytes.data(), bytes.size(), &image)) return false;
+        if (!decodePng(bytes.data(), bytes.size(), &image)) return !required;
         *out = batch_.uploadRgba(image);
-        return out->valid();
+        return out->valid() || !required;
     };
-    load("ground.png", &arena_.ground);
-    load("arena0.png", &arena_.background);
-    load("ropes0_bottom.png", &arena_.ropes_front);
-    load("shadow.png", &arena_.shadow);
+    const bool loaded = load("ground.png", &candidate.ground, true) &&
+                        load("arena0.png", &candidate.background, true) &&
+                        load("ropes0_bottom.png", &candidate.ropes_front, true) &&
+                        load("shadow.png", &candidate.shadow, false);
+    if (!loaded) {
+        for (Texture *texture : {&candidate.ground, &candidate.background,
+                                 &candidate.ropes_front, &candidate.shadow}) {
+            if (texture->valid()) glDeleteTextures(1, &texture->id);
+        }
+        __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                            "arena %s incomplete; keeping the previous arena", folder.c_str());
+        return false;
+    }
 
     // The art is placed so the ring mat's corners sit on the simulation's
     // trapezoid (calibrated from arena0.png: mat top y=164 x=384..1100,
-    // bottom y=430 x=268..1216).
-    arena_.art_scale = kArtScale;
-    arena_.origin_x = 480.0f - 742.0f * kArtScale;
-    arena_.origin_y = 560.0f - 430.0f * kArtScale;
-    return arena_.background.valid();
+    // bottom y=430 x=268..1216). Those dimensions are shared by the DLC arenas.
+    candidate.art_scale = kArtScale;
+    candidate.origin_x = 480.0f - 742.0f * kArtScale;
+    candidate.origin_y = 560.0f - 430.0f * kArtScale;
+    for (Texture *texture : {&arena_.ground, &arena_.background, &arena_.ropes_front,
+                             &arena_.shadow}) {
+        if (texture->valid()) glDeleteTextures(1, &texture->id);
+    }
+    arena_ = candidate;
+    __android_log_print(ANDROID_LOG_INFO, kLogTag, "loaded arena %s", folder.c_str());
+    return true;
 }
 
 bool GameRenderer::setArena(const std::string &folder) {
     if (folder.empty()) return false;
-    for (Texture *texture : {&arena_.ground, &arena_.background, &arena_.ropes_front,
-                             &arena_.shadow}) {
-        if (texture->valid()) {
-            glDeleteTextures(1, &texture->id);
-            *texture = Texture{};
-        }
-    }
     return loadArena(folder);
 }
 

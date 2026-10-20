@@ -295,7 +295,7 @@ void GameApp::update(double frame_seconds) {
             if (intro_stage_ != IntroStage::Done) {
                 updateIntro(static_cast<float>(frame_seconds));
                 // The sim still ticks so the entrance animation plays.
-                accumulator_ += frame_seconds;
+                accumulator_ += frame_seconds * tuning::kGameSpeedScale;
                 int intro_steps = 0;
                 while (accumulator_ >= tuning::kFixedDelta &&
                        intro_steps < tuning::kMaxStepsPerFrame) {
@@ -305,7 +305,7 @@ void GameApp::update(double frame_seconds) {
                 }
                 break;
             }
-            accumulator_ += frame_seconds;
+            accumulator_ += frame_seconds * tuning::kGameSpeedScale;
             int steps = 0;
             while (accumulator_ >= tuning::kFixedDelta && steps < tuning::kMaxStepsPerFrame) {
                 for (InputFrame &frame : inputs_) frame = InputFrame{};

@@ -146,6 +146,7 @@ public:
 private:
     void tickState(float dt, Match &match, const InputFrame &input);
     void tickLocomotion(float dt, Match &match, const InputFrame &input);
+    void tickEntrance(Match &match);
     void tickStrike(float dt, Match &match);
     void tickReaction(float dt, Match &match);
     void tickGround(float dt, Match &match, const InputFrame &input);
@@ -183,6 +184,7 @@ private:
     int opponent_ = -1;
     int strength_ = 1;
     int anim_id_ = 0;
+    std::size_t entrance_anim_index_ = 0;
     bool anim_finished_ = false;
     float game_clock_ = 0.0f;
     float powerup_started_at_ = 0.0f;

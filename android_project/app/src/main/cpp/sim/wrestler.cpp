@@ -64,6 +64,7 @@ void Wrestler::setup(const WrestlerProfile *profile, int id, int team_id, const 
     state_depth = 0;
     region = region::IN_RING;
     anim_id_ = 0;
+    entrance_anim_index_ = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -119,6 +120,21 @@ void Wrestler::changeState(int new_state, int chain, Match &match) {
             if (other != nullptr && other != this &&
                 other->subState() != info->opponent_state) {
                 other->changeState(info->opponent_state, chain, match);
+            }
+        }
+    }
+
+    // StateTable's generic ENTRANCE row points at animation 197, whose frame
+    // IDs are deliberately empty for some wrestlers (Cena's resolve to the
+    // shared none_sprite.sst placeholder). Use the wrestler-specific sequence
+    // from EntranceInfo instead whenever it is available.
+    if (new_state == state::ENTRANCE) {
+        entrance_anim_index_ = 0;
+        if (profile_ != nullptr && data_ != nullptr && !profile_->entrance.anims.empty()) {
+            const int entrance_anim = profile_->entrance.anims.front();
+            if (data_->animInfo(entrance_anim) != nullptr) {
+                anim_id_ = entrance_anim;
+                duration_ = animDuration(*data_, entrance_anim);
             }
         }
     }
@@ -213,7 +229,9 @@ bool Wrestler::loopsAnimation() const {
            s == state::GRAPPLE_HIGH || s == state::GRAPPLE_LOW || s == state::HEADLOCK ||
            s == state::HEADLOCKED || s == state::DOGFIGHT_STANDS || s == state::DOGFIGHT_HIGHER ||
            s == state::DOGFIGHT_LOWER || s == state::PINNING || s == state::BE_PINNED ||
-           s == state::VICTORY || s == state::LOSE || s == state::ENTRANCE;
+           s == state::VICTORY || s == state::LOSE ||
+           (s == state::ENTRANCE &&
+            (profile_ == nullptr || profile_->entrance.anims.empty()));
 }
 
 void Wrestler::advanceAnimation(float dt) {
@@ -298,6 +316,9 @@ void Wrestler::tickState(float dt, Match &match, const InputFrame &input) {
         case state::TAUNT:
             tickLocomotion(dt, match, input);
             break;
+        case state::ENTRANCE:
+            tickEntrance(match);
+            break;
         case state::PUNCH:
         case state::KICK:
             tickStrike(dt, match);
@@ -366,6 +387,32 @@ void Wrestler::tickState(float dt, Match &match, const InputFrame &input) {
             // USE_*_WS and everything else driven from a move table.
             tickMoveStates(dt, match);
             break;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Entrance animation sequence
+// ---------------------------------------------------------------------------
+void Wrestler::tickEntrance(Match &match) {
+    (void)match;
+    if (!anim_finished_ || profile_ == nullptr || data_ == nullptr ||
+        profile_->entrance.anims.empty()) {
+        return;
+    }
+
+    // EntranceInfo is a timed playlist; many wrestlers repeat their last walk
+    // animation several times. Advance one entry only after its clip completes.
+    const std::size_t count = profile_->entrance.anims.size();
+    for (std::size_t attempts = 0; attempts < count; ++attempts) {
+        entrance_anim_index_ = (entrance_anim_index_ + 1) % count;
+        const int next_id = profile_->entrance.anims[entrance_anim_index_];
+        const AnimInfo *next = data_->animInfo(next_id);
+        if (next == nullptr || next->frame_count <= 0) continue;
+        anim_id_ = next_id;
+        duration_ = animDuration(*data_, next_id);
+        anim_time = 0.0f;
+        anim_finished_ = false;
+        return;
     }
 }
 
