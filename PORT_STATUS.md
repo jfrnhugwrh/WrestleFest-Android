@@ -75,7 +75,8 @@ states and the pin/give-up/tag sub-states. `sim/ai.*` implements the twelve AI
 states with the reaction beats from `tuning.h`.
 
 Verified by `sim_test`: entrance staging, the rumble rule and its toss-out,
-pins, and the full match.
+pins, the full match, the power-up meter, exhaustion, the tag rules and a
+six-man Rumble played to a winner.
 
 ## Phase 4 - Renderer (implemented, needs a device for the final check)
 

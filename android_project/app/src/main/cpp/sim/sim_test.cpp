@@ -383,6 +383,52 @@ int main(int argc, char **argv) {
     }
 
     // ------------------------------------------------------------------
+    std::printf("[power-up meter]\n");
+    {
+        // PowerUpBonus (10) is granted by the hit, not by the tick machine; the
+        // machine only fills at HealPUPS and fires the 20 s power-up at 100.
+        const WrestlerProfile *cena_profile = data.wrestlerByFolder("00_John Cena");
+        check(cena_profile != nullptr && std::fabs(cena_profile->base.power_up_bonus - 10.0f) < 0.01f,
+              "BaseInfo PowerUpBonus == 10");
+        Match match;
+        match.configure(&data, ring, 0, 0x31337u);
+        match.addWrestler(data.wrestlerByFolder("00_John Cena"), 0, ring.centerX() - 40.0f,
+                          ring.centerZ(), 1.0f);
+        match.addWrestler(data.wrestlerByFolder("01_TripleH"), 1, ring.centerX() + 40.0f,
+                          ring.centerZ(), -1.0f);
+        match.setAiControlled(0, false);
+        match.setAiControlled(1, false);
+        match.start();
+        Wrestler *attacker = match.wrestler(0);
+        Wrestler *victim = match.wrestler(1);
+        attacker->powerup_value = 0.0f;
+        std::vector<InputFrame> inputs(2);
+        inputs[0].btn0 = true;
+        inputs[0].btn0_edge = true;
+        for (int step = 0; step < 40; ++step) {
+            match.update(1.0f / 60.0f, inputs);
+            match.clearEvents();
+        }
+        std::printf("  info after a strike the meter is %.1f\n", attacker->powerup_value);
+        check(attacker->powerup_value >= 9.0f, "landing a hit adds PowerUpBonus to the meter");
+        check(victim->powerup_value < 20.0f, "the wrestler who was hit gets no bonus");
+
+        // Fill it: at the max (and past the 40 s cooldown) the machine powers the
+        // wrestler up, and the power-up expires after its 20 s duration.
+        attacker->powerup_value = attacker->powerup_max;
+        bool ever_powered = false;
+        for (int step = 0; step < 60 * 70; ++step) {
+            attacker->powerup_value = attacker->powerup_max;
+            match.update(1.0f / 60.0f, inputs);
+            match.clearEvents();
+            if (attacker->powered_up) ever_powered = true;
+            if (ever_powered && !attacker->powered_up) break;
+        }
+        check(ever_powered, "a full meter powers the wrestler up");
+        check(!attacker->powered_up, "the power-up expires after its duration");
+    }
+
+    // ------------------------------------------------------------------
     std::printf("[exhaustion]\n");
     {
         // A wrestler with an empty bar is out: the Rumble cannot pin him, so

@@ -113,6 +113,11 @@ void AiEntity::tickWalk(float dt, Match &match, InputFrame *input) {
                                    : 110.0f;
     if (std::fabs(dx) > engage_range || std::fabs(dz) > match.common().collision_range_z) {
         stickToward(input, dx, dz * 0.6f);
+        // A long gap is closed at a run: holding the red button puts the
+        // wrestler in RUN (CWrestler::TickLocomotion), which is also what makes
+        // the running attack available.
+        const float gap = std::fabs(dx) + std::fabs(dz) * 0.5f;
+        if (gap > tuning::kAiRunRange) input->btn0 = true;
         timer += tuning::kFixedDelta;
     } else {
         setState(AiState::Attack, match);

@@ -165,6 +165,9 @@ private:
     void applyMoveHit(Match &match);
     void finishMove(Match &match);
     void updatePowerUp(float dt, Match &match, bool can_power_up);
+    // AutoReplyPowerUpValue: meter gained by landing a hit. The machine itself
+    // only fills/drains over time; the bonus is the caller's job.
+    void addPowerUpBonus(float amount);
     void moveInput(float dt, const InputFrame &input);
 
     // CollisionRangeX for a state, straight from StateTable.sml. A negative row

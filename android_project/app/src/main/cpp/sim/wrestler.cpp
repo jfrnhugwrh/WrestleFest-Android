@@ -252,6 +252,11 @@ void Wrestler::updatePowerUp(float dt, Match &match, bool can_power_up) {
     }
 }
 
+void Wrestler::addPowerUpBonus(float amount) {
+    if (powered_up || amount <= 0.0f) return;  // AutoReplyPowerUpValue guard
+    powerup_value = std::clamp(powerup_value + amount, 0.0f, powerup_max);
+}
+
 // ---------------------------------------------------------------------------
 // Tick
 // ---------------------------------------------------------------------------
@@ -554,6 +559,7 @@ void Wrestler::tickStrike(float dt, Match &match) {
                                0, match);
             // Motion power for the attacker on a clean hit.
             addMotionPower(2.0f);
+            if (profile_ != nullptr) addPowerUpBonus(profile_->base.power_up_bonus);
             match.emit({EventType::Hit, id_, opponent_, energy_damage, subState()});
         }
     }
@@ -851,6 +857,9 @@ void Wrestler::applyMoveHit(Match &match) {
             }
         }
     }
+    // PowerUpBonus: landing a hit fills the attacker's meter by the
+    // CommonVariableInfo value (10) - the arcade's momentum meter.
+    if (profile_ != nullptr) addPowerUpBonus(profile_->base.power_up_bonus);
     match.emit({EventType::Hit, id_, opponent_, energy_damage, entry});
 }
 

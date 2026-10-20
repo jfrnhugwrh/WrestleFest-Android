@@ -14,6 +14,7 @@ namespace tuning {
 // are the base; at strength 11 a wrestler reacts ~4x faster (0.30 s -> 0.07 s).
 constexpr float kGrappleMashStep = 0.08f;           // a press brings the next beat forward
 constexpr float kRumbleTossRange = 150.0f;           // toss-outs only at the ropes
+constexpr float kAiRunRange = 260.0f;               // AI sprints to close a gap this big
 constexpr float kTagReach = 70.0f;                  // how close the corner must be to tag
 constexpr float kTagEnergyFraction = 0.35f;         // AI tags out below this energy
 constexpr float kGrappleBeat = 0.30f;              // 0x3e99999a GrappleIdleState::onEnter
