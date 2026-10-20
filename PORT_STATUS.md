@@ -99,7 +99,9 @@ the APK on a device.
 ## Phase 5 - Screens and flow (first pass)
 
 `game/app.*` runs Title -> Select -> Entrance/announcer/bell -> Match ->
-Result, with the shipped front-end art, the virtual pad from the control sheet
+Result, with the shipped front-end art (the post-match screen uses
+`ui/Sprites/UI/report/frame.png` - winner portrait, name, match time and the
+score the wrestler earned from his status slots), the virtual pad from the control sheet
 (d-pad bottom left, blue and red buttons on the right, pause button), a pause
 menu (`ui/Sprites/UI/pause/`) that freezes the sim, a rule chip on the select
 screen (1 VS 1 / Royal Rumble, six entrants with staggered entry and a HUD

@@ -174,6 +174,7 @@ bool GameRenderer::loadUi() {
     load("graphics/Sprites/virtual_pad/pause_btn.png", &pause_button_);
     load("graphics/Sprites/virtual_pad/pause_btn_clicked.png", &pause_button_pressed_);
     load("ui/Sprites/UI/pause/background.png", &pause_background_);
+    load("ui/Sprites/UI/report/frame.png", &report_frame_);
     load("ui/Sprites/UI/pause/button.png", &pause_menu_button_);
     return true;
 }
@@ -365,11 +366,11 @@ void GameRenderer::drawActor(const Wrestler &wrestler, float alpha) {
 }
 
 void GameRenderer::drawActorPortrait(const WrestlerProfile &profile, int sst_id, float center_x,
-                                     float feet_y, float alpha) {
+                                     float feet_y, float alpha, float scale) {
     const SpriteEntry *sprite = profile.spriteFor(sst_id);
     const FrameTexture *frame = frameFor(profile, sst_id);
     if (sprite == nullptr || frame == nullptr) return;
-    const float scale = kArtScale;
+    if (scale <= 0.0f) scale = kArtScale;
     const float width = frame->indices.width * scale;
     const float height = frame->indices.height * scale;
     const float left = center_x - width * 0.5f;

@@ -711,19 +711,45 @@ void GameApp::drawSelect() {
 
 void GameApp::drawResult() {
     SpriteBatch &batch = renderer_.batch();
-    batch.draw(renderer_.white(), 0.0f, 430.0f, 960.0f, 210.0f, Color{0.0f, 0.0f, 0.0f, 0.7f});
     const bool player_won = match_.winnerTeam() == 0;
-    renderer_.drawTextCentered(player_won ? "WINNER" : "DEFEATED", 480.0f, 470.0f, 1.4f,
-                               player_won ? Color{1.0f, 0.85f, 0.2f, 1} : Color{0.9f, 0.3f, 0.3f, 1});
-    if (player_won) {
-        const Wrestler *w = match_.wrestler(0);
-        if (w != nullptr && w->profile() != nullptr) {
-            renderer_.drawTextCentered(w->profile()->name, 480.0f, 540.0f, 0.7f,
-                                       Color{1.0f, 1.0f, 1.0f, 1.0f});
+    const int winner_index = match_.winnerIndex();
+    const Wrestler *winner = match_.wrestler(winner_index);
+    const Wrestler *controlled = match_.wrestler(controlled_);
+
+    // The shipped report card: a framed white sheet on a metal desk, exactly
+    // the screen the original shows after the bell.
+    if (renderer_.reportFrame().valid()) {
+        batch.draw(renderer_.reportFrame(), 0.0f, 0.0f, 960.0f, 640.0f, Color{});
+    } else {
+        batch.draw(renderer_.white(), 0.0f, 0.0f, 960.0f, 640.0f, Color{0.1f, 0.1f, 0.12f, 1.0f});
+    }
+
+    const Color ink{0.09f, 0.1f, 0.14f, 1.0f};
+    const Color accent = player_won ? Color{0.72f, 0.5f, 0.06f, 1.0f}
+                                    : Color{0.62f, 0.12f, 0.1f, 1.0f};
+    renderer_.drawTextCentered("MATCH RESULT", 397.0f, 74.0f, 0.8f, ink);
+
+    if (winner != nullptr && winner->profile() != nullptr) {
+        const WrestlerProfile &profile = *winner->profile();
+        const int sst = profile.sprite_index.count("idle.sst") ? profile.sprite_index.at("idle.sst")
+                                                              : -1;
+        renderer_.drawActorPortrait(profile, sst, 397.0f, 400.0f, 1.0f, 0.5f);
+        renderer_.drawTextCentered(profile.name_line1, 397.0f, 412.0f, 0.85f, ink);
+        if (!profile.name_line2.empty()) {
+            renderer_.drawTextCentered(profile.name_line2, 397.0f, 440.0f, 0.55f, ink);
         }
     }
-    renderer_.drawTextCentered("tap to continue", 480.0f, 590.0f, 0.55f,
-                               Color{0.9f, 0.9f, 0.95f, 1.0f});
+    renderer_.drawTextCentered(player_won ? "WINNER" : "DEFEATED", 397.0f, 468.0f, 0.8f, accent);
+
+    // The little panel at the bottom right carries the numbers.
+    char line[64];
+    const int total_seconds = static_cast<int>(match_.clock());
+    std::snprintf(line, sizeof(line), "TIME  %d:%02d", total_seconds / 60, total_seconds % 60);
+    renderer_.drawTextCentered(line, 828.0f, 500.0f, 0.42f, ink);
+    const int score = controlled != nullptr ? controlled->score : 0;
+    std::snprintf(line, sizeof(line), "SCORE  %d", score);
+    renderer_.drawTextCentered(line, 828.0f, 528.0f, 0.42f, ink);
+    renderer_.drawTextCentered("tap to continue", 828.0f, 560.0f, 0.38f, ink);
 }
 
 void GameApp::drawPauseOverlay() {

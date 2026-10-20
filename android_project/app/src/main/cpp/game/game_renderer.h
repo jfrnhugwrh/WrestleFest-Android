@@ -45,7 +45,7 @@ public:
     // Draws one animation frame of a wrestler at an arbitrary spot - used by the
     // select screen for the idle portrait inside the frame.
     void drawActorPortrait(const WrestlerProfile &profile, int sst_id, float center_x,
-                           float feet_y, float alpha);
+                           float feet_y, float alpha, float scale = 0.0f);
     void drawMatch(const Match &match, float alpha);
     void drawActor(const Wrestler &wrestler, float alpha);
     void drawArenaFront();
@@ -67,6 +67,7 @@ public:
     const Texture &arrowPoint() const { return arrow_point_; }
     const Texture &buttonStrip() const { return button_strip_; }
     const Texture &pauseButton() const { return pause_button_; }
+    const Texture &reportFrame() const { return report_frame_; }
     const Texture &pauseMenuBackground() const { return pause_background_; }
     const Texture &pauseMenuButton() const { return pause_menu_button_; }
 
@@ -130,6 +131,7 @@ private:
     Texture pause_button_pressed_;
     Texture pause_background_;
     Texture pause_menu_button_;
+    Texture report_frame_;
     Texture label_1p_;
     Texture label_2p_;
     Texture ref_count_[10];

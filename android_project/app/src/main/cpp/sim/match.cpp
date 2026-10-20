@@ -150,6 +150,18 @@ const Wrestler *Match::wrestler(int index) const {
     return &wrestlers_[static_cast<std::size_t>(index)];
 }
 
+int Match::winnerIndex() const {
+    if (phase_ != MatchPhase::Finished || winner_team_ < 0) return -1;
+    int fallback = -1;
+    for (int i = 0; i < wrestlerCount(); ++i) {
+        const Wrestler *w = wrestler(i);
+        if (w == nullptr || w->team != winner_team_) continue;
+        if (!w->isDead()) return i;
+        if (fallback < 0) fallback = i;
+    }
+    return fallback;
+}
+
 float Match::timeLeft() const {
     if (rule_ == nullptr) return 0.0f;
     if (rule_->max_match_time >= 9000.0f) return -1.0f;  // infinite

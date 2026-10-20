@@ -99,6 +99,8 @@ public:
 
     MatchPhase phase() const { return phase_; }
     int winnerTeam() const { return winner_team_; }
+    // Index of the wrestler on the winning side (-1 before the result).
+    int winnerIndex() const;
     int loserTeam() const { return loser_team_; }
     float timeLeft() const;
     bool isRumble() const { return rule_ != nullptr && rule_->id == 2; }
