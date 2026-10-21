@@ -721,8 +721,8 @@ void GameRenderer::drawMenuText(const std::string &text, float x, float ink_top,
 void GameRenderer::drawMenuTextCentered(const std::string &text, float center_x, float ink_top,
                                         float size, const Color &color, float tracking,
                                         float shadow_offset) {
-    drawMenuText(text, center_x - measureMenuText(text, size, tracking), ink_top, size, color,
-                 tracking, shadow_offset);
+    drawMenuText(text, center_x - measureMenuText(text, size, tracking) * 0.5f, ink_top, size,
+                 color, tracking, shadow_offset);
 }
 
 float GameRenderer::measureMenuText(const std::string &text, float size, float tracking) const {
