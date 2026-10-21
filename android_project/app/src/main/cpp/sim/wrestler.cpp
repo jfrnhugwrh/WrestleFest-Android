@@ -145,6 +145,11 @@ void Wrestler::changeState(int new_state, int chain, Match &match) {
     move_hit_applied = false;
     hurt_done_ = false;
     used_move_this_state_ = false;
+    // A pending strike/move impact must not survive into an unrelated state -
+    // otherwise an interrupted move lands its damage frames later, on whoever
+    // happens to be close (one of the "random hit" animation desyncs).
+    impact_time_ = -1.0f;
+    hurt_timing_ = -1.0f;
     // NOTE: pinned/held are owned by Match - clearing them here would break a
     // pin the moment BE_PINNED is entered.
     button_counter_active = false;
@@ -163,6 +168,8 @@ void Wrestler::nextState(Match &match) {
     anim_time = 0.0f;
     state_timer = 0.0f;
     anim_finished_ = false;
+    impact_time_ = -1.0f;
+    hurt_timing_ = -1.0f;
     const int current = subState();
     const StateInfo *info = data_ != nullptr ? data_->stateInfo(current) : nullptr;
     if (info != nullptr && info->anim_id >= 0) {
@@ -354,6 +361,8 @@ void Wrestler::tickState(float dt, Match &match, const InputFrame &input) {
         case state::DOGFIGHT_PUNCHED:
             tickDogfight(dt, match);
             break;
+        case state::JUMP_FOR_PIN:
+        case state::PIN:
         case state::PINNING:
         case state::BE_PINNED:
             tickPinStates(dt, match, input);
@@ -362,10 +371,26 @@ void Wrestler::tickState(float dt, Match &match, const InputFrame &input) {
         case state::BE_USED_S_WS:
             tickSubmission(dt, match, input);
             break;
-        case state::STANDUP:
-        case state::JUMP_FOR_PIN:
-        case state::PICKUP:
+        case state::USE_F_WS_PIN:
+        case state::BE_USED_F_WS_PIN:
+            // Cradle moves (FISHERMAN_SUPLEX / PERFECT_PLEX): the throw itself
+            // becomes the cover - the pin system owns this pair from here.
+            tickPinStates(dt, match, input);
+            break;
+        case state::BE_USED_F_WS:
+        case state::BE_USED_RFWS:
+        case state::BE_USED_CL_HANG:
+        case state::BE_USED_CL_DROP:
+        case state::BE_USED_RAM_WS:
+        case state::LO_TH_PRESSED:
         case state::PICKUPED:
+            // The attacker owns these states: the victim must NOT self-advance
+            // (BE_USED_* clips are often shorter than the attacker's, so the
+            // old default popped the victim to idle in the middle of a throw).
+            tickVictimHold(dt, match);
+            break;
+        case state::STANDUP:
+        case state::PICKUP:
         case state::CLIMBTOP:
         case state::CLIMBIN:
         case state::CLIMBOUT:
@@ -511,35 +536,47 @@ void Wrestler::tryStartAttack(Match &match, const InputFrame &input) {
         return;
     }
 
-    // Ground attack when the opponent is down (uses the ground move slot 3).
-    const float ground_range = collisionRange(state::USE_F_WS, grapple_range);
-    if (opponent_down &&
-        canReach(x, z, facing, other->x, other->z, ground_range, range_z, true)) {
-        const StatusSlot &slot = profile_->status[3];
-        for (int i = 0; i < slot.list_count && i < 4; ++i) {
-            const int id = slot.attack[static_cast<std::size_t>(i)];
-            if (id < 0) continue;
-            const MoveInfo *move = data_->moveInfo(id);
-            if (move == nullptr) continue;
-            beginMove(id);
-            useWrestleStyle(*move, match);
-            return;
+    // The opponent is down (HandleOpponentOnGround). Blue = cover him for the
+    // pin; red = ground attack (stomp/elbow). Both need to be in the ring.
+    if (opponent_down) {
+        const float ground_range = collisionRange(state::USE_F_WS, grapple_range);
+        if (canReach(x, z, facing, other->x, other->z, ground_range, range_z, true)) {
+            if (input.btn1_edge) {
+                if (match.rule().can_pin && pinWindowOpen(*other, match)) {
+                    startPin(match);
+                } else {
+                    // Not pinnable: lift him back up (PICKUP / PICKUPED pair).
+                    changeState(state::PICKUP, 0, match);
+                    other->facing = -facing;
+                    other->opponent_ = id_;
+                }
+                return;
+            }
+            const StatusSlot &slot = profile_->status[3];
+            for (int i = 0; i < slot.list_count && i < 4; ++i) {
+                const int id = slot.attack[static_cast<std::size_t>(i)];
+                if (id < 0) continue;
+                const MoveInfo *move = data_->moveInfo(id);
+                if (move == nullptr) continue;
+                beginMove(id);
+                useWrestleStyle(*move, match);
+                return;
+            }
         }
+        return;
     }
 
-    // Plain strike. Fast strikes (PUNCH/KICK) are always available; the running
-    // attack slot 0 is used while running.
-    const int slot_index = subState() == state::RUN ? 0 : -1;
-    if (slot_index >= 0) {
-        const StatusSlot &slot = profile_->status[static_cast<std::size_t>(slot_index)];
+    // Running attack (status slot 0). When out of reach of the running move the
+    // press falls through to a plain strike instead of being eaten.
+    if (subState() == state::RUN) {
+        const StatusSlot &slot = profile_->status[0];
+        const float run_range = collisionRange(state::RUN, grapple_range + 20.0f);
         for (int i = 0; i < slot.list_count && i < 4; ++i) {
             const int id = slot.attack[static_cast<std::size_t>(i)];
             if (id < 0) continue;
             const MoveInfo *move = data_->moveInfo(id);
-            if (move == nullptr) continue;
-            if (move->energy_damage <= 0) continue;
-            const float run_range = collisionRange(state::RUN, grapple_range + 20.0f);
-            if (!canReach(x, z, facing, other->x, other->z, run_range, range_z, true)) return;
+            if (move == nullptr || move->energy_damage <= 0) continue;
+            if (!canReach(x, z, facing, other->x, other->z, run_range, range_z, true)) break;
             beginMove(id);
             useWrestleStyle(*move, match);
             return;
@@ -547,6 +584,38 @@ void Wrestler::tryStartAttack(Match &match, const InputFrame &input) {
     }
 
     startStrike(input.btn1_edge ? state::KICK : state::PUNCH, match);
+}
+
+bool Wrestler::pinWindowOpen(const Wrestler &victim, const Match &match) const {
+    if (profile_ == nullptr || victim.profile() == nullptr || data_ == nullptr) return false;
+    if (isDead() || play_dead || region != region::IN_RING) return false;
+    if (victim.region != region::IN_RING) return false;
+    if (victim.isDead() || victim.held || victim.pinned) return false;
+    if (!victim.isDown()) return false;
+    // The original's pin gate: the victim must be at or under his GBH energy
+    // threshold (BaseInfo, 24) or the cover just picks him up instead.
+    if (victim.energy > static_cast<float>(victim.profile()->base.gbh_value)) return false;
+    const float range_x = collisionRange(state::PINNING, 100.0f);
+    const float range_z = match.common().collision_range_z;
+    return canReach(x, z, facing, victim.x, victim.z, range_x, range_z, false);
+}
+
+void Wrestler::startPin(Match &match) {
+    Wrestler *other = match.wrestler(opponent_);
+    if (other == nullptr) return;
+    setOpponent(other->id());
+    other->setOpponent(id_);
+    if (other->x != x) facing = other->x > x ? 1.0f : -1.0f;
+    // Seat the victim at the pin animation's origin (AdjustOpponentXZ), then
+    // dive: JUMP_FOR_PIN -> PIN -> PINNING run chained in tickPinStates.
+    if (other->subState() != state::ONGROUND && other->subState() != state::BE_PINNED) {
+        other->changeState(state::ONGROUND, 0, match);
+    }
+    changeState(state::JUMP_FOR_PIN, 0, match);
+    other->x = ring_ != nullptr ? ring_->clampX(z, x + facing * stateSnapOffset(state::JUMP_FOR_PIN, 40.0f))
+                                : x + facing * stateSnapOffset(state::JUMP_FOR_PIN, 40.0f);
+    other->z = z;
+    match.emit({EventType::Impact, id_, opponent_, 1.0f, state::JUMP_FOR_PIN});
 }
 
 void Wrestler::startStrike(int strike_state, Match &match) {
@@ -596,6 +665,10 @@ void Wrestler::tickStrike(float dt, Match &match) {
         const float strike_range = collisionRange(subState(), 110.0f);
         const MoveInfo *move = data_ != nullptr ? data_->moveInfo(move_id) : nullptr;
         if (other != nullptr && move != nullptr && !other->isDead() &&
+            // Punches/kicks only connect against a standing target (the moves'
+            // AttackPosition 0); a downed man is attacked with the ground
+            // moves, never stood back up by a jab.
+            !other->isDown() &&
             canReach(x, z, facing, other->x, other->z, strike_range, range_z, true)) {
             // Damage is the (energy, motion) pair from WrestleStyleList.
             const float energy_damage = static_cast<float>(move->energy_damage);
@@ -629,6 +702,7 @@ void Wrestler::tickReaction(float dt, Match &match) {
 
 void Wrestler::tickGround(float dt, Match &match, const InputFrame &input) {
     (void)dt;
+    if (play_dead) return;  // a given-up/KO'd man does not get back up
     // Mash to get up (ButtonCountTable "ONGROUND" row); a downed wrestler below
     // 10 energy needs 100 presses, i.e. cannot get up.
     if (!button_counter_active) {
@@ -636,7 +710,10 @@ void Wrestler::tickGround(float dt, Match &match, const InputFrame &input) {
         button_count = 0;
         button_goal = data_ != nullptr ? data_->buttonCountGoal(state::ONGROUND, energy, 0) : 4;
     }
-    if (input.anyButton()) ++button_count;
+    // The original's bits are edge pulses: hold-to-mash does not count, only
+    // real presses do (100 held frames used to "mash out" of the 100-press
+    // can't-get-up row in under two seconds).
+    if (input.anyButtonEdge()) ++button_count;
 
     const float max_ground = profile_ != nullptr ? profile_->base.max_on_ground_time_max : 8.0f;
     const bool reached = button_goal > 0 && button_count >= button_goal;
@@ -748,22 +825,48 @@ void Wrestler::useWrestleStyle(const MoveInfo &move, Match &match) {
         case state::USE_F_WS: {
             const ForceMove *force = data_->forceMove(sub_type);
             if (force != nullptr) {
-                if (force->anim_id >= 0) {
+                const AnimInfo *anim =
+                    force->anim_id >= 0 ? data_->animInfo(force->anim_id) : nullptr;
+                if (anim != nullptr) {
+                    // Same rule as ChangeState for state-table anims: the move's
+                    // Facing multiplies the attacker's direction (this is what
+                    // makes SNAPMARE-style moves - Facing -1 - play turned
+                    // around instead of mirrored against the art).
+                    if (anim->facing != 0.0f) {
+                        facing = (facing >= 0.0f ? 1.0f : -1.0f) * anim->facing;
+                    }
                     anim_id_ = force->anim_id;
                     duration_ = animDuration(*data_, force->anim_id);
                 }
                 if (other != nullptr) {
-                    if (force->opponent_anim_id >= 0) {
-                        other->anim_id_ = force->opponent_anim_id;
-                        other->duration_ = animDuration(*data_, force->opponent_anim_id);
-                    }
                     other->changeState(state::BE_USED_F_WS, 0, match);
-                    other->facing = -facing;
                     other->opponent_ = id_;
-                    // AdjustOpponentXZ on entry keeps paired animations aligned.
-                    if (force->adjust_opponent) {
-                        other->x = x + facing * 60.0f;
-                        other->z = z;
+                    if (anim != nullptr) {
+                        // AdjustOpponentXZ: the pair shares one origin - seat
+                        // the victim at the attacker anim's xOffset, facing per
+                        // its OpposingFacing, then apply the victim-anim Facing
+                        // the same way ChangeState would.
+                        if (force->adjust_opponent) {
+                            other->x = x + facing * anim->x_offset;
+                            if (ring_ != nullptr) other->x = ring_->clampX(z, other->x);
+                            other->z = z;
+                        }
+                        if (anim->opposing_facing != 0.0f) {
+                            other->facing = (facing >= 0.0f ? 1.0f : -1.0f) * anim->opposing_facing;
+                        }
+                        const AnimInfo *victim_anim = data_->animInfo(force->opponent_anim_id);
+                        if (victim_anim != nullptr && victim_anim->facing != 0.0f) {
+                            other->facing =
+                                (other->facing >= 0.0f ? 1.0f : -1.0f) * victim_anim->facing;
+                        }
+                        if (force->opponent_anim_id >= 0) {
+                            other->anim_id_ = force->opponent_anim_id;
+                            other->duration_ = animDuration(*data_, force->opponent_anim_id);
+                            other->anim_time = 0.0f;
+                            other->anim_finished_ = false;
+                        }
+                    } else {
+                        other->facing = -facing;
                     }
                 }
                 // Damage lands at HurtOpponentTimming, else at a calibrated point.
@@ -881,19 +984,15 @@ void Wrestler::applyMoveHit(Match &match) {
     other->facing = -facing;
 
     // Reaction state from the move family, matching the original's pairing.
+    // A grounded victim stays on the mat (ONGROUND_HURT) - the old code tested
+    // the attacker here, so a downed victim was popped back to his feet.
     const int entry = subState();
     if (entry != state::USE_F_WS && entry != state::USE_S_WS && entry != state::USE_CL_WS) {
-        other->changeState(isDown() ? state::ONGROUND_HURT : state::HITREACT_HIGH, 0, match);
+        other->changeState(other->isDown() ? state::ONGROUND_HURT : state::HITREACT_HIGH, 0, match);
     }
-    if (other->energy <= 0.0f) {
-        other->energy = 0.0f;
-        other->energy_display = 0.0f;
-        other->play_dead = true;
-        other->active = false;
-        other->region = region::KNOCKED_OUT;
-        other->changeState(state::ONGROUND, 0, match);
-        match.emit({EventType::KnockedOut, other->id(), id_, 0.0f, state::ONGROUND});
-    }
+    // An empty bar does NOT knock the victim out here: in pin rules (1v1, tag)
+    // he lies there pinnable, and Match::checkExhausted handles the no-pin
+    // rules (rumble) next frame.
     // Score comes from the wrestler's status slot, not from a literal.
     if (profile_ != nullptr) {
         for (const StatusSlot &slot : profile_->status) {
@@ -952,6 +1051,9 @@ void Wrestler::finishMove(Match &match) {
 void Wrestler::tickMoveStates(float dt, Match &match) {
     (void)dt;
 
+    // Only the OWNER of a paired move runs this path: the victim sides are
+    // handled by tickVictimHold. A stray BE_USED_* here would re-apply the
+    // attacker's stale damage stats to the wrong person.
     // Damage lands once, at the calibrated/HurtTimming point.
     if (!move_hit_applied && hurt_timing_ >= 0.0f && anim_time >= hurt_timing_) {
         move_hit_applied = true;
@@ -964,41 +1066,155 @@ void Wrestler::tickMoveStates(float dt, Match &match) {
     }
 }
 
+void Wrestler::tickVictimHold(float dt, Match &match) {
+    (void)dt;
+    // The OWNER of the paired move routes the victim out when its animation
+    // finishes. The victim only advances his own clip (which latches on the
+    // final pose when it is shorter than the attacker's) - self-advancing here
+    // popped the victim to idle mid-throw and, via finishMove, could even
+    // re-apply the attacker's move damage.
+    Wrestler *owner = match.wrestler(opponent_);
+    bool driving = false;
+    if (owner != nullptr && state_timer < tuning::kVictimHoldMax) {
+        switch (subState()) {
+            case state::BE_USED_F_WS:
+                driving = owner->subState() == state::USE_F_WS;
+                break;
+            case state::BE_USED_F_WS_PIN:
+                driving = owner->subState() == state::USE_F_WS_PIN;
+                break;
+            case state::BE_USED_RFWS:
+                driving = owner->subState() == state::USE_RFWS ||
+                          owner->subState() == state::USE_RFWS_RUSH;
+                break;
+            case state::BE_USED_CL_HANG:
+            case state::BE_USED_CL_DROP:
+                driving = owner->subState() == state::USE_CL_WS ||
+                          owner->subState() == state::USE_CL_HANG ||
+                          owner->subState() == state::USE_CL_DROP ||
+                          owner->subState() == state::USE_CL_BEGIN;
+                break;
+            case state::BE_USED_RAM_WS:
+                driving = owner->subState() == state::USE_RAM_WS;
+                break;
+            case state::LO_TH_PRESSED:
+                driving = owner->subState() == state::LO_TH_PRESS;
+                break;
+            case state::PICKUPED:
+                driving = owner->subState() == state::PICKUP;
+                break;
+            default:
+                break;
+        }
+    }
+    if (driving) return;
+
+    // The pair is over: either disrupted (owner hit by a third party, desync
+    // in a multi-man match) or the owner just forgot to route us. PICKUPED's
+    // whole point is to lift the victim - he gets up; everyone else hits the
+    // mat the pair left him on.
+    changeState(subState() == state::PICKUPED ? state::IDLE : state::ONGROUND, 0, match);
+}
+
 // ---------------------------------------------------------------------------
 // Pins and submissions
 // ---------------------------------------------------------------------------
 void Wrestler::tickPinStates(float dt, Match &match, const InputFrame &input) {
     (void)dt;
     const int s = subState();
-    if (s == state::PINNING) {
-        // The referee owns the count; hold the pose until Match ends the pin.
-        return;
-    }
-    if (s == state::BE_PINNED) {
-        if (!button_counter_active) {
-            button_counter_active = true;
-            button_count = 0;
-            button_goal = data_ != nullptr ? data_->buttonCountGoal(state::BE_PINNED, energy,
-                                                                    pin_attempts)
-                                           : 9;
-            match.emit({EventType::PinStarted, id_, opponent_,
-                        static_cast<float>(button_goal), s});
-        }
-        if (input.anyButton()) ++button_count;
-        if (button_goal > 0 && button_count >= button_goal) {
-            pinned = false;
-            button_counter_active = false;
-            if (match.rule().heal_by_kick_out) {
-                addEnergy(match.common().heal_energy_by_kick_out_opponent);
-            }
-            changeState(state::STANDUP, 0, match);
-            match.emit({EventType::KickOut, id_, opponent_, static_cast<float>(button_count), s});
+    switch (s) {
+        case state::JUMP_FOR_PIN:
+            // The dive onto the downed man; the cover follows automatically.
+            if (anim_finished_) changeState(state::PIN, 0, match);
+            return;
+        case state::PIN: {
+            if (!anim_finished_) return;
             Wrestler *other = match.wrestler(opponent_);
-            if (other != nullptr && other->subState() == state::PINNING) {
-                other->changeState(state::STANDUP, 0, match);
+            if (other == nullptr || !other->isDown() || other->isDead() ||
+                other->play_dead) {
+                // He rolled away before the cover: the pin whiffs.
+                changeState(state::STANDUP, 0, match);
+                return;
             }
+            // Cover lands: hold him (PINNING loop) and bring the referee over.
+            changeState(state::PINNING, 0, match);
+            other->setOpponent(id_);
+            other->pinned = true;
+            // Every cover on a drained man counts an attempt: ButtonCountTable
+            // adds +5 presses per attempt, so successive covers get harder and
+            // harder to kick out of - that is how the original converges a
+            // beating to a fall instead of 20 identical near-falls.
+            ++other->pin_attempts;
+            other->changeState(state::BE_PINNED, 0, match);
+            match.emit({EventType::PinStarted, id_, opponent_,
+                        static_cast<float>(other->energy), state::PINNING});
+            return;
         }
-        return;
+        case state::PINNING:
+            // The referee owns the count; the victim breaks the pin himself by
+            // kicking out of BE_PINNED (which shoves the pinner off).
+            return;
+        case state::USE_F_WS_PIN: {
+            // Cradle-hold attacker: once the victim has landed in the cradle,
+            // have the referee come over and count.
+            Wrestler *other = match.wrestler(opponent_);
+            if (other == nullptr || other->subState() != state::BE_USED_F_WS_PIN ||
+                !match.rule().can_pin) {
+                // The cradle broke (interrupted) or the rule has no ref/count:
+                // stand up and let go.
+                changeState(state::STANDUP, 0, match);
+                if (other != nullptr && other->pinned) {
+                    other->pinned = false;
+                    other->changeState(state::PUSHOFF, 0, match);
+                }
+                return;
+            }
+            if (!other->pinned) {
+                other->setOpponent(id_);
+                other->pinned = true;
+                ++other->pin_attempts;
+                match.emit({EventType::PinStarted, id_, opponent_,
+                            static_cast<float>(other->energy), s});
+            }
+            return;
+        }
+        case state::BE_USED_F_WS_PIN:
+        case state::BE_PINNED: {
+            if (!match.rule().can_pin && subState() == state::BE_USED_F_WS_PIN) {
+                // No referee in this rule (rumble): the cradle cannot become a
+                // fall - shove out of it immediately.
+                changeState(state::PUSHOFF, 0, match);
+                return;
+            }
+            if (!button_counter_active) {
+                // HandleBePinned: the mash counter only runs once the referee
+                // is on the count for this wrestler - no head start, and no
+                // waste before the cover lands.
+                if (!match.refereePinTarget(id_)) return;
+                button_counter_active = true;
+                button_count = 0;
+                button_goal = data_ != nullptr ? data_->buttonCountGoal(state::BE_PINNED, energy,
+                                                                        pin_attempts)
+                                               : 9;
+            }
+            // Edge-press mashing (the original's +0xa8/+0xa9 are pulse bits).
+            if (!play_dead && input.anyButtonEdge()) ++button_count;
+            if (button_goal > 0 && button_count >= button_goal) {
+                // Kick out: the original sends the kicker to PUSHOFF, and the
+                // state-table pairing shoves the pinner airborne off him.
+                pinned = false;
+                button_counter_active = false;
+                if (match.rule().heal_by_kick_out) {
+                    addEnergy(match.common().heal_energy_by_kick_out_opponent);
+                }
+                changeState(state::PUSHOFF, 0, match);
+                match.emit({EventType::KickOut, id_, opponent_,
+                            static_cast<float>(button_count), s});
+            }
+            return;
+        }
+        default:
+            return;
     }
 }
 
@@ -1014,7 +1230,7 @@ void Wrestler::tickSubmission(float dt, Match &match, const InputFrame &input) {
             button_goal = data_->buttonCountGoal(state::RESTRAINED, energy, 0);
             if (button_goal <= 0) button_goal = 13;
         }
-        if (input.anyButton()) ++button_count;
+        if (!play_dead && input.anyButtonEdge()) ++button_count;
         if (button_goal > 0 && button_count >= button_goal) {
             held = false;
             button_counter_active = false;

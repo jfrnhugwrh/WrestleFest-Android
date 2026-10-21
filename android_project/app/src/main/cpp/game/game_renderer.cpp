@@ -687,8 +687,20 @@ void GameRenderer::drawHud(const Match &match, int player_index) {
     for (int i = 0; i < count; ++i) {
         const Wrestler *w = match.wrestler(i);
         if (w == nullptr) continue;
-        if (w->subState() == state::BE_PINNED) {
+        if (w->subState() == state::BE_PINNED || w->subState() == state::BE_USED_F_WS_PIN) {
             drawTextCentered("MASH!", 480.0f, 300.0f, 0.9f, Color{1.0f, 0.35f, 0.3f, 1.0f});
+        }
+    }
+
+    // "PIN!" prompt for the human: a downed, drained opponent is within reach
+    // and the blue button covers him (the original shows no prompt, but the
+    // touch buttons benefit from one).
+    const Wrestler *player = match.wrestler(player_index);
+    if (player != nullptr && player->canAct() && !player->isBusy() &&
+        match.rule().can_pin) {
+        const Wrestler *target = match.wrestler(player->opponentId());
+        if (target != nullptr && player->pinWindowOpen(*target, match)) {
+            drawTextCentered("PIN!", 480.0f, 300.0f, 0.95f, Color{0.45f, 0.8f, 1.0f, 1.0f});
         }
     }
 }

@@ -291,11 +291,22 @@ void GameApp::update(double frame_seconds) {
             int steps = 0;
             while (accumulator_ >= tuning::kFixedDelta && steps < tuning::kMaxStepsPerFrame) {
                 for (InputFrame &frame : inputs_) frame = InputFrame{};
+                // Hysteresis on the analogue stick: a direction engages at the
+                // deadzone and releases only well inside it. A finger hovering
+                // at the 0.35 boundary used to flicker IDLE<->WALK every frame,
+                // restarting the walk animation each time (visible jitter).
+                constexpr float kStickRelease = kStickDeadzone * 0.6f;
+                if (stick_dir_x_ <= -kStickDeadzone) stick_axis_x_ = -1;
+                else if (stick_dir_x_ >= kStickDeadzone) stick_axis_x_ = 1;
+                else if (std::fabs(stick_dir_x_) <= kStickRelease) stick_axis_x_ = 0;
+                if (stick_dir_y_ <= -kStickDeadzone) stick_axis_z_ = -1;
+                else if (stick_dir_y_ >= kStickDeadzone) stick_axis_z_ = 1;
+                else if (std::fabs(stick_dir_y_) <= kStickRelease) stick_axis_z_ = 0;
                 InputFrame &human = inputs_[static_cast<std::size_t>(controlled_)];
-                human.left = stick_dir_x_ <= -kStickDeadzone;
-                human.right = stick_dir_x_ >= kStickDeadzone;
-                human.up = stick_dir_y_ <= -kStickDeadzone;
-                human.down = stick_dir_y_ >= kStickDeadzone;
+                human.left = stick_axis_x_ < 0;
+                human.right = stick_axis_x_ > 0;
+                human.up = stick_axis_z_ < 0;
+                human.down = stick_axis_z_ > 0;
                 human.btn0 = red_down_;
                 human.btn1 = blue_down_;
                 human.btn0_edge = red_edge_;

@@ -108,6 +108,9 @@ public:
 
     const Referee &referee() const { return referee_; }
     int outsideCount() const { return outside_count_; }
+    // True when the referee is walking to / counting the pin of this wrestler
+    // (HandleBePinned's gate for starting the mash counter).
+    bool refereePinTarget(int wrestler) const { return referee_.watchingPinFor(wrestler); }
 
     // Ends the match immediately (used by tests and by the flow layer).
     void finish(int winner_team);
@@ -123,15 +126,17 @@ private:
     void updateGrappleBeats(float dt);
     void updateDogfights();
     void updateRegions();
-    void tryPinAttempts();
     void resolveCollisions();
+    // Keeps two standing wrestlers from stacking into the same sprite.
+    void resolveBodySeparation();
     // CWrestler::GetOpponent: every wrestler points at its nearest live enemy.
     // Paired moves keep the opponent they started with.
     void updateOpponents();
     void updateRumbleEntries(float dt);
-    // A wrestler who is out of energy is out of the match. Without this an
-    // exhausted wrestler can sit in STAND_TIRED with an empty bar forever (a
-    // Rumble cannot pin him out, so the match would never end).
+    // A wrestler who is out of energy is out of the match - but only in rules
+    // without pins. In pin rules an empty bar means "pinnable", not out: he
+    // lies there until someone covers him, which is exactly the original's
+    // exhaustion flow (exhaust_value exhaustion ≠ elimination).
     void checkExhausted();
     // Moves every entrant past the starting pair to the aisle (no-op unless the
     // Rumble rule and staggered entry are both active).
@@ -158,7 +163,6 @@ private:
     float outside_timer_ = 0.0f;
     bool outside_warned_ = false;
     float grapple_beat_timer_ = 0.0f;
-    float pin_cooldown_ = 0.0f;
     bool grapple_resolved_ = false;
     bool auto_start_ = true;
     float entry_interval_ = 0.0f;
@@ -176,7 +180,6 @@ private:
     std::vector<InputFrame> pending_inputs_;
     std::vector<bool> ai_controlled_;
     float ai_tick_ = 0.0f;
-    float pin_interval_ = 2.2f;
 };
 
 }  // namespace wrestlefest

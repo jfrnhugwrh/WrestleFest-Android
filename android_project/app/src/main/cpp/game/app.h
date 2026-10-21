@@ -173,6 +173,9 @@ private:
     Pointer button_blue_;
     float stick_dir_x_ = 0.0f;
     float stick_dir_y_ = 0.0f;
+    // Hysteresis-latched stick axes (-1/0/1 per axis) — see update().
+    int stick_axis_x_ = 0;
+    int stick_axis_z_ = 0;
     bool red_down_ = false;
     bool blue_down_ = false;
     bool red_edge_ = false;

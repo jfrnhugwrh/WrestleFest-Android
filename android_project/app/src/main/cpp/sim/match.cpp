@@ -278,12 +278,11 @@ void Match::update(float dt, const std::vector<InputFrame> &inputs) {
     }
 
     // 3. Referee, counts, collisions.
-    if (pin_cooldown_ > 0.0f) pin_cooldown_ = std::max(0.0f, pin_cooldown_ - dt);
     referee_.tick(dt, *this);
     updateGrappleBeats(dt);
     resolveCollisions();
+    resolveBodySeparation();
     updateRegions();
-    tryPinAttempts();
 
     // 4. Win conditions.
     if (phase_ == MatchPhase::Running) checkWinConditions(dt);
@@ -533,6 +532,35 @@ void Match::resolveCollisions() {
     }
 }
 
+void Match::resolveBodySeparation() {
+    // Two wrestlers on their feet cannot occupy the same spot: push them apart
+    // to a minimum gap, like the arcade's body block. Without this the pair
+    // used to converge to dx==0 and jab each other from inside the same
+    // sprite forever (no grapple, no throws, match decided on the clock).
+    // Only standing, free wrestlers separate - paired moves, the pin dive and
+    // the ground game deliberately overlap the pair.
+    for (int i = 0; i < wrestlerCount(); ++i) {
+        Wrestler *a = wrestler(i);
+        if (a == nullptr || !a->active || a->isDead() || !a->canAct()) continue;
+        if (a->region != region::IN_RING && a->region != region::IN_RING_ALONE) continue;
+        for (int j = i + 1; j < wrestlerCount(); ++j) {
+            Wrestler *b = wrestler(j);
+            if (b == nullptr || !b->active || b->isDead() || !b->canAct()) continue;
+            if (b->region != region::IN_RING && b->region != region::IN_RING_ALONE) continue;
+            if (!depthOverlap(a->z, b->z, data_->common().collision_range_z)) continue;
+            const float dx = b->x - a->x;
+            const float overlap = tuning::kBodySeparation - std::fabs(dx);
+            if (overlap <= 0.0f) continue;
+            const float dir = dx >= 0.0f ? 1.0f : -1.0f;
+            const float push = overlap * 0.5f * dir;
+            a->x -= push;
+            b->x += push;
+            a->x = ring_.clampX(a->z, a->x);
+            b->x = ring_.clampX(b->z, b->x);
+        }
+    }
+}
+
 void Match::updateRegions() {
     // Region bookkeeping. Ropes/climbing are not simulated yet (the state table
     // has the CLIMB* states for it); what matters here is the outside count.
@@ -557,40 +585,15 @@ void Match::updateRegions() {
 }
 
 void Match::checkExhausted() {
+    // With pins available an empty bar means "can be pinned", never a direct
+    // elimination: the wrestler lies down until he is covered for the three.
+    // Only pin-less rules (Royal Rumble) eliminate on exhaustion.
+    if (rule_ != nullptr && rule_->can_pin) return;
     for (int i = 0; i < wrestlerCount(); ++i) {
         Wrestler *w = wrestler(i);
         if (w == nullptr || w->isDead() || isOnApron(i) || isWaitingEntrant(i)) continue;
         if (w->energy > 0.0f) continue;
         w->knockOut(*this);
-    }
-}
-
-void Match::tryPinAttempts() {
-    if (rule_ == nullptr || !rule_->can_pin) return;
-    if (pin_cooldown_ > 0.0f) return;
-
-    for (int i = 0; i < wrestlerCount(); ++i) {
-        Wrestler *attacker = wrestler(i);
-        if (attacker == nullptr || attacker->isDead() || attacker->play_dead) continue;
-        if (attacker->subState() != state::IDLE && attacker->subState() != state::WALK) continue;
-        Wrestler *victim = wrestler(attacker->opponentId());
-        if (victim == nullptr || victim->team == attacker->team) continue;
-        if (!victim->isDown() || victim->pinned) continue;
-        // A pin is attempted on a wrestler with no energy left to fight out;
-        // the mash goal from ButtonCountTable decides the kick-out.
-        // Pins are attempted on a wrestler with no fight left; the arcade
-        // original only pins when the energy bar is empty.
-        if (victim->energy > 6.0f) continue;
-        attacker->changeState(state::PINNING, 0, *this);
-        victim->changeState(state::BE_PINNED, 0, *this);
-        victim->pinned = true;
-        victim->pin_attempts = victim->energy <= 1.0f ? victim->pin_attempts + 1 : 0;
-        victim->setOpponent(attacker->id());
-        // Do not let a pin be re-attempted every frame after a kick-out.
-        pin_cooldown_ = pin_interval_;
-        emit({EventType::PinStarted, victim->id(), attacker->id(),
-              static_cast<float>(victim->energy), state::BE_PINNED});
-        return;
     }
 }
 

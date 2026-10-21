@@ -143,13 +143,30 @@ void AiEntity::tickAttackVsOpponent(Match &match, InputFrame *input, int opponen
         case state::GRAPPLE_HIGH:
         case state::GRAPPLE_LOW: {
             // Grappling is how a match is actually won (a punch does 2 damage
-            // against 1.4/s of healing). The AI fights for the clinch most of
-            // the time, exactly like AttackState's close-range routing.
-            // In a Rumble only the clinch can win (CanPin/CanSubmission are 0),
-            // so the AI always fights for the grapple there.
-            const bool grapple = match.isRumble() || match.rng().range(11) < 8;
-            if (grapple && std::fabs(other->x - self->x) > 4.0f) {
-                stickDirection(input, other->x - self->x, other->z - self->z);
+            // against 1.4/s of healing; a throw does 10 and floors him). The
+            // grapple press must be given inside the grapple's own reach -
+            // pressing from punch range (the old behaviour) whiffed every
+            // time, so the old AI jabbed forever, nobody's bar ever drained,
+            // pins never happened and the match ran to the clock.
+            const StateInfo *grapple_info = match.data().stateInfo(state::GRAPPLE_IDLE);
+            const float grapple_range = grapple_info != nullptr && grapple_info->collision_range_x > 0.0f
+                                            ? grapple_info->collision_range_x * 0.9f
+                                            : 90.0f;
+            const float dx = other->x - self->x;
+            const float dz = other->z - self->z;
+            const bool grapple_close = std::fabs(dx) <= grapple_range &&
+                                       std::fabs(dz) <= match.common().collision_range_z;
+            if (!grapple_close && match.isRumble()) {
+                // In a Rumble only the clinch can win: close the gap, no jabs.
+                stickToward(input, dx, dz);
+                return;
+            }
+            const bool grapple = grapple_close &&
+                                 (match.isRumble() || match.rng().range(11) < 8);
+            if (grapple) {
+                // dx==0 (standing on top of him) still needs a direction or the
+                // press reads as a plain strike - reach the way we're facing.
+                stickDirection(input, dx != 0.0f ? dx : self->facing, dz);
             }
             input->btn0 = true;
             input->btn0_edge = true;
@@ -266,6 +283,22 @@ void AiEntity::tickReaction(float dt, Match &match) {
     if (timer >= beat) setState(AiState::SearchEnemy, match);
 }
 
+// One button EDGE every kAiMashPeriod seconds. The original's mash counters
+// count real presses (the +0xa8/+0xa9 bits are edge pulses), so holding the
+// button flat - the old behaviour - did nothing; the cadence is what a mashing
+// thumb does (BePinState's 0.12 s beat).
+void AiEntity::emitMash(float dt, Match &match, InputFrame *input, bool also_blue) {
+    mash_timer_ += dt;
+    if (mash_timer_ < tuning::kAiMashPeriod) return;
+    mash_timer_ = 0.0f;
+    input->btn0 = true;
+    input->btn0_edge = true;
+    if (also_blue && match.rng().range(3) == 0) {
+        input->btn1 = true;
+        input->btn1_edge = true;
+    }
+}
+
 void AiEntity::tick(float dt, Match &match, InputFrame *input) {
     if (input == nullptr) return;
     input->clear();
@@ -357,19 +390,41 @@ void AiEntity::tick(float dt, Match &match, InputFrame *input) {
             case AiState::BeAttacked:
             case AiState::BeHeld:
                 tickReaction(dt, match);
-                input->btn0 = true;  // mash out
+                emitMash(dt, match, input, false);  // mash out
                 break;
-            case AiState::BePin:
+            case AiState::BePin: {
                 tickReaction(dt, match);
-                input->btn0 = true;
-                input->btn1 = match.rng().range(2) == 0;
+                // Kick-out mash: while the ref is coming over, the victim
+                // hammers both buttons to reach the button_count goal.
+                emitMash(dt, match, input, true);
                 break;
+            }
             case AiState::OnGroundAttack: {
                 Wrestler *other = match.wrestler(target);
                 if (other != nullptr) {
                     stickToward(input, other->x - self->x, other->z - self->z);
-                    input->btn0 = true;
-                    input->btn0_edge = true;
+                    const StateInfo *pin_info = match.data().stateInfo(state::PINNING);
+                    const float reach = pin_info != nullptr && pin_info->collision_range_x > 0.0f
+                                            ? pin_info->collision_range_x * 0.9f
+                                            : 90.0f;
+                    const bool in_reach =
+                        std::fabs(other->x - self->x) <= reach &&
+                        std::fabs(other->z - self->z) <= match.common().collision_range_z;
+                    if (in_reach && attack_delay <= 0.0f) {
+                        // Go for the pin when the rule allows it and the man on
+                        // the mat is drained; otherwise keep stomping.
+                        const bool pin = match.rule().can_pin &&
+                                         self->pinWindowOpen(*other, match);
+                        if (pin) {
+                            input->btn1 = true;
+                            input->btn1_edge = true;
+                        } else {
+                            input->btn0 = true;
+                            input->btn0_edge = true;
+                        }
+                        attack_delay = tuning::kAiMashPeriod * 8.0f +
+                                       static_cast<float>(match.rng().range(40)) * 0.01f;
+                    }
                 }
                 break;
             }

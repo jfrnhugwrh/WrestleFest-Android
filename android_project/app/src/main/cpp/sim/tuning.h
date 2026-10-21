@@ -68,6 +68,19 @@ constexpr float kOutsideCountReaction = 10.0f;  // ref count > 10 -> AI leaves t
 constexpr float kStrikeImpactFraction = 0.5f;
 // Damage applies at this fraction of a signature move when HurtTimming is absent.
 constexpr float kForceImpactFraction = 0.45f;
+// Failsafe for the victim of a paired move (BE_USED_* / PICKUPED): the owner of
+// the pair is expected to route the victim out within its animation. If the
+// pair is broken (owner hit by a third party, desync in a multi-man match) the
+// victim recovers on their own after this long. No paired clip exceeds ~0.9 s.
+constexpr float kVictimHoldMax = 3.0f;
+// Standing wrestlers cannot stack into the same sprite: the arcade's body
+// block kept them at arm's length, which is also what makes grapple range
+// meaningful (grapple reach is 110).
+constexpr float kBodySeparation = 46.0f;
+// The original's input bits 0xa8/0xa9 are *edge* pulses, so its mash counters
+// count real presses, not held frames. The AI therefore mashes on a cadence:
+// one press about every kAiMashPeriod seconds (BePinState's 0.12 s beat).
+constexpr float kAiMashPeriod = 0.12f;
 
 }  // namespace tuning
 }  // namespace wrestlefest

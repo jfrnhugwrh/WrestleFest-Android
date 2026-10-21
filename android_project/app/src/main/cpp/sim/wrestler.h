@@ -99,6 +99,14 @@ public:
     // Selects the move the wrestler is about to execute (move_id + sub type).
     void beginMove(int move_id);
 
+    // Starts a pin attempt on a downed, drained opponent (blue button next to
+    // him, the original's HandleOpponentOnGround path): dive -> cover -> hold.
+    void startPin(Match &match);
+    // True when a pin can currently be started on `victim`: he is down, below
+    // his GBH energy threshold, in the ring, and inside the pin reach. Used by
+    // tryStartAttack, the attacker AI and the HUD prompt.
+    bool pinWindowOpen(const Wrestler &victim, const Match &match) const;
+
     // Animation state, exposed for the renderer.
     int animId() const { return anim_id_; }
     int spriteId() const;
@@ -155,6 +163,9 @@ private:
     void tickMoveStates(float dt, Match &match);
     void tickPinStates(float dt, Match &match, const InputFrame &input);
     void tickSubmission(float dt, Match &match, const InputFrame &input);
+    // Victim side of a paired move (BE_USED_* / PICKUPED): holds the pose and
+    // lets the owner route the state out - never self-advances.
+    void tickVictimHold(float dt, Match &match);
     void tickDogfight(float dt, Match &match);
 
     void tryStartAttack(Match &match, const InputFrame &input);

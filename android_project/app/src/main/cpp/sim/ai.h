@@ -35,6 +35,7 @@ struct AiEntity {
     AiState state = AiState::SearchEnemy;
     float timer = 0.0f;      // time left in the current state's beat
     float beat = 0.0f;       // length of that beat
+    float mash_timer_ = 0.0f;  // countdown to the next mash edge press
     // Pause between attacks, mimicking the original's per-state timing beats
     // (without it the AI re-presses the button on every idle frame).
     float attack_delay = 0.6f;
@@ -49,6 +50,8 @@ private:
     void tickWalk(float dt, Match &match, InputFrame *input);
     void tickAttack(float dt, Match &match, InputFrame *input);
     void tickAttackVsOpponent(Match &match, InputFrame *input, int opponent_state);
+    // Press a button edge every kAiMashPeriod seconds (get-up / escape mash).
+    void emitMash(float dt, Match &match, InputFrame *input, bool also_blue);
     void tickGrapple(float dt, Match &match);
     void tickReaction(float dt, Match &match);
     void tickRingSide(Match &match, InputFrame *input);
