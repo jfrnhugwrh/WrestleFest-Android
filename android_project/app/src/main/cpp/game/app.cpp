@@ -70,16 +70,25 @@ bool GameApp::initialize(AssetLoader *assets, AudioPlayer *audio) {
     audio_ = audio;
     source_ = LoaderAssetSource(assets);
 
-    std::string error;
-    if (!data_.load(&source_, "data/Data", &error)) {
-        error_ = error;
-        __android_log_print(ANDROID_LOG_ERROR, kLogTag, "data load failed: %s", error.c_str());
-        return false;
-    }
+    // The renderer comes up first so a data failure can still be drawn on the
+    // loading card instead of leaving a black screen.
     if (!renderer_.initialize(assets, &data_)) {
         error_ = "renderer init failed";
         return false;
     }
+    // From here on the app can render: a data failure is reported on the
+    // loading card instead of leaving a black screen.
+    ready_ = true;
+    menu_.attach(&renderer_, &data_);
+
+    std::string error;
+    if (!data_.load(&source_, "data/Data", &error)) {
+        error_ = error;
+        data_ok_ = false;
+        __android_log_print(ANDROID_LOG_ERROR, kLogTag, "data load failed: %s", error.c_str());
+        return true;
+    }
+    data_ok_ = true;
 
     // Default card: Cena against the biggest man on the roster, like the
     // original's demo match.
@@ -100,8 +109,12 @@ bool GameApp::initialize(AssetLoader *assets, AudioPlayer *audio) {
             }
         }
     }
-    scene_ = Scene::Title;
-    ready_ = true;
+    // Open on the selected wrestler's page of the grid and on the first arena,
+    // like the original does when it builds the scenes.
+    superstar_page_ = pageOfSelection(selected_player_, menu::kGridPageSize);
+    arena_page_ = pageOfSelection(arena_index_, menu::kArenaPageSize);
+    scene_ = Scene::Loading;
+    loading_timer_ = 0.0f;
     __android_log_print(ANDROID_LOG_INFO, kLogTag,
                         "loaded %zu states, %zu anims, %zu moves, %zu wrestlers",
                         data_.states().size(), data_.anims().size(), data_.moves().size(),
@@ -239,57 +252,26 @@ void GameApp::update(double frame_seconds) {
     clock_ += static_cast<float>(frame_seconds);
 
     switch (scene_) {
+        case Scene::Loading:
+            loading_timer_ += static_cast<float>(frame_seconds);
+            if (data_ok_ && (loading_timer_ > 1.6f || tap_pending_)) {
+                tap_pending_ = false;
+                enterScene(Scene::Title);
+            }
+            break;
         case Scene::Title:
             if (tap_pending_) {
                 tap_pending_ = false;
-                scene_ = Scene::Select;
+                enterScene(Scene::MainMenu);
             }
             break;
-        case Scene::Select: {
-            if (!tap_pending_) break;
-            tap_pending_ = false;
-            const float x = tap_x_;
-            const float y = tap_y_;
-            const int count = static_cast<int>(data_.wrestlers().size());
-            if (count <= 1) break;
-            // Mode chip, top right: taps between 1 VS 1 and the Royal Rumble.
-            if (y > 14.0f && y < 62.0f && x > 660.0f && x < 946.0f) {
-                mode_ = (mode_ + 1) % 3;
-                break;
-            }
-            // Arena chip, top left.
-            if (y > 14.0f && y < 62.0f && x > 14.0f && x < 300.0f) {
-                const int arena_count = static_cast<int>(data_.arenas().size());
-                if (arena_count > 0) arena_index_ = (arena_index_ + 1) % arena_count;
-                break;
-            }
-            const bool on_fight = y > 480.0f && x > 60.0f && x < 900.0f;
-            if (on_fight) {
-                const WrestlerProfile &player =
-                    data_.wrestlers()[static_cast<std::size_t>(selected_player_)];
-                const WrestlerProfile &opponent =
-                    data_.wrestlers()[static_cast<std::size_t>(selected_opponent_)];
-                if (mode_ == 1) {
-                    startRumble(&player, &opponent);
-                } else if (mode_ == 2) {
-                    startTagMatch(&player, &opponent);
-                } else {
-                    startMatch(&player, &opponent);
-                }
-            } else if (x < 480.0f) {
-                // Left panel: tap the arrows/portrait to cycle the player.
-                selected_player_ = (selected_player_ + 1) % count;
-                if (selected_player_ == selected_opponent_) {
-                    selected_player_ = (selected_player_ + 1) % count;
-                }
-            } else {
-                selected_opponent_ = (selected_opponent_ + 1) % count;
-                if (selected_opponent_ == selected_player_) {
-                    selected_opponent_ = (selected_opponent_ + 1) % count;
-                }
-            }
+        case Scene::MainMenu:
+        case Scene::Modes:
+        case Scene::Select:
+        case Scene::Arena:
+        case Scene::Options:
+            updateMenus(static_cast<float>(frame_seconds));
             break;
-        }
         case Scene::Match: {
             if (paused_) break;
             if (intro_stage_ != IntroStage::Done) {
@@ -346,11 +328,266 @@ void GameApp::update(double frame_seconds) {
         case Scene::Result:
             if (tap_pending_) {
                 tap_pending_ = false;
-                scene_ = Scene::Select;
+                enterScene(Scene::MainMenu);
             }
             break;
-        case Scene::Loading:
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Front end
+// ---------------------------------------------------------------------------
+int GameApp::pageCount(int item_count, int per_page) const {
+    if (per_page <= 0) return 1;
+    return std::max(1, (item_count + per_page - 1) / per_page);
+}
+
+int GameApp::pageOfSelection(int selection, int per_page) const {
+    if (per_page <= 0) return 0;
+    return std::max(0, selection) / per_page;
+}
+
+int GameApp::clampPage(int page, int page_count) {
+    return std::clamp(page, 0, std::max(0, page_count - 1));
+}
+
+const WrestlerProfile *GameApp::playerProfile() const {
+    if (data_.wrestlers().empty()) return nullptr;
+    const int index = std::clamp(selected_player_, 0, static_cast<int>(data_.wrestlers().size()) - 1);
+    return &data_.wrestlers()[static_cast<std::size_t>(index)];
+}
+
+const WrestlerProfile *GameApp::opponentProfile() const {
+    if (data_.wrestlers().empty()) return nullptr;
+    const int index =
+        std::clamp(selected_opponent_, 0, static_cast<int>(data_.wrestlers().size()) - 1);
+    return &data_.wrestlers()[static_cast<std::size_t>(index)];
+}
+
+void GameApp::enterScene(Scene scene) {
+    scene_ = scene;
+    confirm_timer_ = 0.0f;
+    confirm_action_ = false;
+    notice_timer_ = 0.0f;
+    tap_pending_ = false;
+    if (scene == Scene::Select) {
+        superstar_page_ = clampPage(pageOfSelection(selected_player_, menu::kGridPageSize),
+                                    pageCount(static_cast<int>(data_.wrestlers().size()),
+                                              menu::kGridPageSize));
+        superstar_pick_ = -1;
+    } else if (scene == Scene::Arena) {
+        arena_page_ = clampPage(pageOfSelection(arena_index_, menu::kArenaPageSize),
+                                pageCount(static_cast<int>(data_.arenas().size()),
+                                          menu::kArenaPageSize));
+        arena_pick_ = -1;
+    }
+}
+
+void GameApp::showNotice(const std::string &text) {
+    notice_ = text;
+    notice_timer_ = 2.2f;
+    playCue("audio/sfx/Ui01.wav");
+}
+
+void GameApp::updateMenus(float dt) {
+    if (notice_timer_ > 0.0f) notice_timer_ -= dt;
+    if (confirm_timer_ > 0.0f) {
+        confirm_timer_ -= dt;
+        if (confirm_timer_ <= 0.0f && confirm_action_) {
+            confirm_action_ = false;
+            if (scene_ == Scene::Select) {
+                enterScene(Scene::Arena);
+            } else if (scene_ == Scene::Arena) {
+                startSelectedMatch();
+            }
+        }
+    }
+    if (tap_pending_) {
+        tap_pending_ = false;
+        handleMenuTap(tap_x_, tap_y_);
+    }
+}
+
+void GameApp::handleMenuTap(float x, float y) {
+    switch (scene_) {
+        case Scene::MainMenu:
+            handleMainMenuTap(x, y);
             break;
+        case Scene::Modes:
+            handleModesTap(x, y);
+            break;
+        case Scene::Select:
+            handleSuperstarTap(x, y);
+            break;
+        case Scene::Arena:
+            handleArenaTap(x, y);
+            break;
+        case Scene::Options:
+            handleOptionsTap(x, y);
+            break;
+        default:
+            break;
+    }
+}
+
+void GameApp::handleMainMenuTap(float x, float y) {
+    // The back arrow on the top screen has nowhere to go: it is drawn faded and
+    // ignored, exactly like the original's inert info bar.
+    if (menu::backHit(x, y)) return;
+    const int entry = menu::mainEntryAt(x, y);
+    if (entry < 0) return;
+    main_entry_ = entry;
+    if (!menu::mainEntryEnabled(entry)) {
+        showNotice("MULTIPLAYER NEEDS XBOX LIVE");
+        return;
+    }
+    playCue("audio/sfx/Ui01.wav");
+    switch (entry) {
+        case static_cast<int>(menu::MainEntry::GameModes):
+            enterScene(Scene::Modes);
+            break;
+        case static_cast<int>(menu::MainEntry::Shop):
+            showNotice("THE SHOP IS NOT AVAILABLE IN THIS BUILD");
+            break;
+        case static_cast<int>(menu::MainEntry::Options):
+            enterScene(Scene::Options);
+            break;
+        default:
+            break;
+    }
+}
+
+void GameApp::handleModesTap(float x, float y) {
+    if (menu::backHit(x, y)) {
+        playCue("audio/sfx/Ui01.wav");
+        enterScene(Scene::MainMenu);
+        return;
+    }
+    const int entry = menu::modeEntryAt(x, y);
+    if (entry < 0) return;
+    mode_entry_ = entry;
+    const int rule = menu::modeGameRule(entry);
+    if (rule < 0) {
+        showNotice(std::string(menu::modeLabel(entry)) + " IS NOT AVAILABLE IN THIS BUILD");
+        return;
+    }
+    playCue("audio/sfx/Ui01.wav");
+    // Same numbering as Match::configure: 0 = 1 VS 1, 1 = tag, 2 = rumble.
+    mode_ = rule;
+    enterScene(Scene::Select);
+}
+
+void GameApp::handleOptionsTap(float x, float y) {
+    if (menu::backHit(x, y)) {
+        playCue("audio/sfx/Ui01.wav");
+        enterScene(Scene::MainMenu);
+        return;
+    }
+    // Row 0 toggles the sound, row 1 leaves the screen.
+    if (menu::insideRect(x, y, menu::kMainStripX, menu::mainRowY(0), menu::kMainStripWidth,
+                         menu::kMainStripHeight)) {
+        sound_on_ = !sound_on_;
+        if (audio_ != nullptr) audio_->setMuted(!sound_on_);
+        playCue("audio/sfx/Ui01.wav");
+    } else if (menu::insideRect(x, y, menu::kMainStripX, menu::mainRowY(1),
+                                menu::kMainStripWidth, menu::kMainStripHeight)) {
+        playCue("audio/sfx/Ui01.wav");
+        enterScene(Scene::MainMenu);
+    }
+}
+
+void GameApp::handleSuperstarTap(float x, float y) {
+    const int count = static_cast<int>(data_.wrestlers().size());
+    const int pages = pageCount(count, menu::kGridPageSize);
+    if (menu::backHit(x, y)) {
+        playCue("audio/sfx/Ui01.wav");
+        enterScene(Scene::Modes);
+        return;
+    }
+    if (menu::nextArrowHit(x, y)) {
+        if (superstar_page_ + 1 < pages) {
+            ++superstar_page_;
+            superstar_pick_ = -1;
+            playCue("audio/sfx/Ui01.wav");
+        }
+        return;
+    }
+    if (menu::previousArrowHit(x, y)) {
+        if (superstar_page_ > 0) {
+            --superstar_page_;
+            superstar_pick_ = -1;
+            playCue("audio/sfx/Ui01.wav");
+        }
+        return;
+    }
+    const int slot = menu::superstarCardAt(x, y);
+    if (slot < 0 || confirm_timer_ > 0.0f) return;
+    const int index = superstar_page_ * menu::kGridPageSize + slot;
+    if (index >= count) return;
+    selected_player_ = index;
+    // The CPU takes a different man; the mode's extra entrants are picked in
+    // startRumble()/startTagMatch() from these two.
+    chooseOpponent();
+    superstar_pick_ = slot;
+    playCue("audio/sfx/Ui01.wav");
+    confirm_timer_ = 0.35f;
+    confirm_action_ = true;
+}
+
+void GameApp::handleArenaTap(float x, float y) {
+    const int count = static_cast<int>(data_.arenas().size());
+    const int pages = pageCount(count, menu::kArenaPageSize);
+    if (menu::backHit(x, y)) {
+        playCue("audio/sfx/Ui01.wav");
+        enterScene(Scene::Select);
+        return;
+    }
+    if (menu::nextArrowHit(x, y)) {
+        if (arena_page_ + 1 < pages) {
+            ++arena_page_;
+            arena_pick_ = -1;
+            playCue("audio/sfx/Ui01.wav");
+        }
+        return;
+    }
+    if (menu::previousArrowHit(x, y)) {
+        if (arena_page_ > 0) {
+            --arena_page_;
+            arena_pick_ = -1;
+            playCue("audio/sfx/Ui01.wav");
+        }
+        return;
+    }
+    const int slot = menu::arenaCardAt(x, y);
+    if (slot < 0 || confirm_timer_ > 0.0f) return;
+    const int index = arena_page_ * menu::kArenaPageSize + slot;
+    if (index >= count) return;
+    arena_index_ = index;
+    arena_pick_ = slot;
+    playCue("audio/sfx/Ui01.wav");
+    confirm_timer_ = 0.35f;
+    confirm_action_ = true;
+}
+
+void GameApp::chooseOpponent() {
+    const int count = static_cast<int>(data_.wrestlers().size());
+    if (count <= 1) return;
+    // Arcade rule: the CPU fields someone else off the card, picked from the
+    // frame clock so a rematch is not always the same pairing.
+    const int step = 1 + static_cast<int>(clock_ * 7.0f) % (count - 1);
+    selected_opponent_ = (selected_player_ + step) % count;
+}
+
+void GameApp::startSelectedMatch() {
+    const WrestlerProfile *player = playerProfile();
+    const WrestlerProfile *opponent = opponentProfile();
+    if (player == nullptr || opponent == nullptr) return;
+    if (mode_ == 1) {
+        startRumble(player, opponent);
+    } else if (mode_ == 2) {
+        startTagMatch(player, opponent);
+    } else {
+        startMatch(player, opponent);
     }
 }
 
@@ -495,8 +732,11 @@ void GameApp::touchDown(int pointer_id, float x, float y) {
                 paused_ = false;
                 playCue("audio/sfx/Attack01.wav");
             } else if (y > kQuitY - 30.0f && y < kQuitY + 30.0f) {
+                // Quit walks back out the way the match came in: the main menu
+                // (the original returns to the mode list; either is one tap
+                // from a rematch).
                 paused_ = false;
-                scene_ = Scene::Select;
+                enterScene(Scene::MainMenu);
             }
         }
         return;
@@ -584,11 +824,32 @@ void GameApp::render(int viewport_x, int viewport_y, int viewport_w, int viewpor
     if (!ready_) return;
     renderer_.begin(viewport_x, viewport_y, viewport_w, viewport_h);
     switch (scene_) {
-        case Scene::Title:
-            drawTitle();
+        case Scene::Loading:
+            menu_.drawLoading(clock_, !error_.empty(), error_);
             break;
-        case Scene::Select:
-            drawSelect();
+        case Scene::Title:
+            menu_.drawTitle(clock_);
+            break;
+        case Scene::MainMenu:
+            menu_.drawMainMenu(main_entry_);
+            break;
+        case Scene::Modes:
+            menu_.drawModes(mode_entry_);
+            break;
+        case Scene::Select: {
+            const int pages = pageCount(static_cast<int>(data_.wrestlers().size()),
+                                        menu::kGridPageSize);
+            menu_.drawSuperstarPage(clampPage(superstar_page_, pages), superstar_pick_, pages);
+            break;
+        }
+        case Scene::Arena: {
+            const int pages =
+                pageCount(static_cast<int>(data_.arenas().size()), menu::kArenaPageSize);
+            menu_.drawArenaPage(clampPage(arena_page_, pages), arena_pick_, pages);
+            break;
+        }
+        case Scene::Options:
+            drawOptions();
             break;
         case Scene::Match:
             renderer_.drawMatch(match_, 0.0f);
@@ -604,138 +865,46 @@ void GameApp::render(int viewport_x, int viewport_y, int viewport_w, int viewpor
             renderer_.drawMatch(match_, 0.0f);
             drawResult();
             break;
-        case Scene::Loading:
-            break;
+    }
+    if (notice_timer_ > 0.0f && scene_ != Scene::Match && scene_ != Scene::Result) {
+        menu_.drawNotice(notice_, std::min(1.0f, notice_timer_ * 2.0f));
     }
     renderer_.end();
 }
 
-void GameApp::drawTitle() {
-    SpriteBatch &batch = renderer_.batch();
-    // The shipped backdrop and logo, exactly as they are in the original.
-    if (renderer_.uiBackground().valid()) {
-        batch.draw(renderer_.uiBackground(), 0.0f, 0.0f, 960.0f, 640.0f, Color{});
-    } else {
-        batch.draw(renderer_.white(), 0.0f, 0.0f, 960.0f, 640.0f,
-                   Color{0.05f, 0.06f, 0.10f, 1.0f});
-    }
-    if (renderer_.titleLogo().valid()) {
-        const float logo_w = 790.0f * 0.85f;
-        const float logo_h = 204.0f * 0.85f;
-        batch.draw(renderer_.titleLogo(), 480.0f - logo_w * 0.5f, 110.0f, logo_w, logo_h, Color{});
-    } else {
-        renderer_.drawTextCentered("WRESTLEFEST", 480.0f, 150.0f, 2.0f,
-                                   Color{1.0f, 0.82f, 0.18f, 1});
-    }
-
-    // Blinking "tap to start", 1 Hz like the original's attract loop.
-    const float pulse = 0.55f + 0.45f * std::fabs(std::sin(clock_ * 2.2f));
-    if (renderer_.tapToStart().valid()) {
-        const float w = 374.0f;
-        const float h = 47.0f;
-        batch.draw(renderer_.tapToStart(), 480.0f - w * 0.5f, 420.0f, w, h,
-                   Color{1.0f, 1.0f, 1.0f, pulse});
-    } else {
-        renderer_.drawTextCentered("TAP TO START", 480.0f, 420.0f, 0.85f,
-                                   Color{1.0f, 1.0f, 1.0f, pulse});
-    }
-
-    char buffer[128];
-    std::snprintf(buffer, sizeof(buffer), "%d superstars  %d moves  %d states",
-                  static_cast<int>(data_.wrestlers().size()),
-                  static_cast<int>(data_.moves().size()), static_cast<int>(data_.states().size()));
-    renderer_.drawTextCentered(buffer, 480.0f, 590.0f, 0.45f, Color{0.8f, 0.82f, 0.9f, 0.9f});
-}
-
-void GameApp::drawSelect() {
+// Options: the two switches this port can honour, laid out on the main menu's
+// strips so the screen reads like the rest of the front end.
+void GameApp::drawOptions() {
     SpriteBatch &batch = renderer_.batch();
     if (renderer_.uiBackground().valid()) {
-        batch.draw(renderer_.uiBackground(), 0.0f, 0.0f, 960.0f, 640.0f, Color{0.7f, 0.7f, 0.75f, 1});
-    } else {
-        batch.draw(renderer_.white(), 0.0f, 0.0f, 960.0f, 640.0f, Color{0.04f, 0.05f, 0.08f, 1.0f});
+        batch.draw(renderer_.uiBackground(), 0.0f, 0.0f, menu::kCanvasWidth, menu::kCanvasHeight,
+                   Color{});
     }
-    renderer_.drawTextCentered("SELECT YOUR SUPERSTAR", 480.0f, 26.0f, 0.8f,
-                               Color{1.0f, 1.0f, 1.0f, 1.0f});
+    renderer_.drawMenuTextCentered(
+        "OPTIONS", menu::kCanvasWidth * 0.5f,
+        menu::headingInkTop(renderer_.menuFont().metrics()), menu::kHeadingSize, menu::titleRed(),
+        menu::kHeadingTracking, menu::kHeadingShadow);
 
-    // Arena chip, top left, from AllArenaTable.
-    {
-        std::string label = "ARENA";
-        if (!data_.arenas().empty()) {
-            const int index = std::clamp(arena_index_, 0,
-                                         static_cast<int>(data_.arenas().size()) - 1);
-            label = data_.arenas()[static_cast<std::size_t>(index)].name;
-            if (label.size() > 26) label = label.substr(0, 26);
+    const char *labels[2] = {"SOUND", "BACK"};
+    for (int i = 0; i < 2; ++i) {
+        const float y = menu::mainRowY(i);
+        const Texture &strip = renderer_.mainButton(i);
+        if (strip.valid()) {
+            batch.draw(strip, menu::kMainStripX, y, menu::kMainStripWidth, menu::kMainStripHeight,
+                       Color{});
         }
-        batch.draw(renderer_.white(), 18.0f, 18.0f, 282.0f, 40.0f,
-                   Color{0.16f, 0.14f, 0.1f, 0.95f});
-        renderer_.drawTextCentered(label, 159.0f, 30.0f, 0.42f, Color{1.0f, 0.9f, 0.65f, 1.0f});
+        std::string text = labels[i];
+        if (i == 0) text += sound_on_ ? ": ON" : ": OFF";
+        const FontMetrics &metrics = renderer_.menuFont().metrics();
+        renderer_.drawMenuTextCentered(
+            text, menu::kCanvasWidth * 0.5f,
+            y + menu::centreInBox(metrics, 0.0f, menu::kMainStripHeight, menu::kMainLabelSize),
+            menu::kMainLabelSize, menu::normalText(), menu::kLabelTracking, menu::kLabelShadow);
     }
-
-    // Rule chip: 1 VS 1 or the Royal Rumble, straight from InGameTable.
-    {
-        const char *label = mode_ == 0 ? "1 VS 1" : (mode_ == 1 ? "ROYAL RUMBLE" : "TAG TEAM");
-        batch.draw(renderer_.white(), 664.0f, 18.0f, 278.0f, 40.0f,
-                   mode_ == 1 ? Color{0.55f, 0.14f, 0.1f, 0.95f}
-                              : (mode_ == 2 ? Color{0.12f, 0.4f, 0.22f, 0.95f}
-                                            : Color{0.12f, 0.2f, 0.36f, 0.95f}));
-        renderer_.drawTextCentered(label, 803.0f, 30.0f, 0.5f, Color{1.0f, 0.9f, 0.65f, 1.0f});
+    if (renderer_.backButton().valid()) {
+        batch.draw(renderer_.backButton(), menu::kBackX, menu::kBackY, menu::kBackSize,
+                   menu::kBackSize, Color{});
     }
-
-    const int count = static_cast<int>(data_.wrestlers().size());
-    if (count == 0) return;
-    const int player_index = selected_player_;
-    const int opponent_index = selected_opponent_;
-    const WrestlerProfile &player = data_.wrestlers()[static_cast<std::size_t>(player_index)];
-    const WrestlerProfile &opponent = data_.wrestlers()[static_cast<std::size_t>(opponent_index)];
-
-    // Panels: 1P on the left, the CPU on the right, framed like the original.
-    auto panel = [&](const WrestlerProfile &profile, float center_x, bool active) {
-        if (renderer_.superstarFrame().valid()) {
-            const float size = 300.0f;
-            batch.draw(renderer_.superstarFrame(), center_x - size * 0.5f, 110.0f, size, size,
-                       active ? Color{} : Color{0.55f, 0.55f, 0.6f, 1.0f});
-        }
-        // Idle portrait inside the frame.
-        const int sst = profile.sprite_index.count("idle.sst") ? profile.sprite_index.at("idle.sst")
-                                                               : -1;
-        renderer_.drawActorPortrait(profile, sst, center_x, 380.0f, active ? 1.0f : 0.6f);
-
-        renderer_.drawTextCentered(profile.name_line1, center_x, 396.0f, 0.7f,
-                                   active ? Color{1.0f, 0.92f, 0.7f, 1} : Color{0.75f, 0.75f, 0.8f, 1});
-        if (!profile.name_line2.empty()) {
-            renderer_.drawTextCentered(profile.name_line2, center_x, 424.0f, 0.5f,
-                                       Color{0.9f, 0.9f, 0.95f, 1});
-        }
-        char stats[96];
-        std::snprintf(stats, sizeof(stats), "ENERGY %d  POWER %d",
-                      static_cast<int>(profile.base.energy),
-                      static_cast<int>(profile.base.motion_power));
-        renderer_.drawTextCentered(stats, center_x, 452.0f, 0.4f, Color{0.8f, 0.85f, 0.95f, 1});
-    };
-    panel(player, 250.0f, true);
-    panel(opponent, 710.0f, false);
-
-    // Arrows: the previous/next sprites, mirrored for the left side.
-    if (renderer_.arrowPrevious().valid()) {
-        batch.draw(renderer_.arrowPrevious(), 100.0f, 250.0f, 41.0f, 64.0f, Color{});
-        batch.draw(renderer_.arrowNext(), 816.0f, 250.0f, 41.0f, 64.0f, Color{});
-    }
-    if (renderer_.arrowNext().valid()) {
-        batch.draw(renderer_.arrowNext(), 372.0f, 250.0f, 41.0f, 64.0f, Color{});
-        batch.draw(renderer_.arrowPrevious(), 552.0f, 250.0f, 41.0f, 64.0f, Color{});
-    }
-
-    // FIGHT button: the shipped button strip with text over it.
-    if (renderer_.buttonStrip().valid()) {
-        batch.draw(renderer_.buttonStrip(), 480.0f - 388.0f, 500.0f, 776.0f, 49.0f,
-                   Color{1.0f, 1.0f, 1.0f, 0.95f});
-    } else {
-        batch.draw(renderer_.white(), 330.0f, 500.0f, 300.0f, 60.0f,
-                   Color{0.78f, 0.14f, 0.14f, 1.0f});
-    }
-    renderer_.drawTextCentered("FIGHT", 480.0f, 510.0f, 0.9f, Color{1.0f, 1.0f, 1.0f, 1.0f});
-    renderer_.drawTextCentered("tap a panel to switch superstar   /   FIGHT to start", 480.0f, 590.0f,
-                               0.42f, Color{0.9f, 0.9f, 1.0f, 1.0f});
 }
 
 void GameApp::drawResult() {
@@ -815,7 +984,7 @@ void GameApp::drawPauseOverlay() {
         renderer_.drawTextCentered(label, 480.0f, y + 10.0f, 0.75f, Color{1.0f, 1.0f, 1.0f, 1.0f});
     };
     row("RESUME", kResumeY);
-    row("QUIT TO SELECT", kQuitY);
+    row("QUIT TO MAIN MENU", kQuitY);
     renderer_.drawTextCentered("RESUME or the pause button to keep playing", 480.0f, 560.0f, 0.4f,
                                Color{0.12f, 0.15f, 0.2f, 1.0f});
 }

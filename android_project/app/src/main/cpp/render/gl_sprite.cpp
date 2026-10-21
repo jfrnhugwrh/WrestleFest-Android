@@ -250,6 +250,44 @@ void SpriteBatch::draw(const Texture &texture, float x, float y, float w, float 
     drawRegion(texture, x, y, w, h, 0.0f, 0.0f, 1.0f, 1.0f, color, flip_x);
 }
 
+void SpriteBatch::drawRotated(const Texture &texture, float center_x, float center_y, float w,
+                              float h, float degrees, const Color &color) {
+    if (!texture.valid() || w <= 0.0f || h <= 0.0f) return;
+    if (current_texture_ != texture.id || current_palette_mode_) {
+        flush();
+        current_texture_ = texture.id;
+        current_palette_ = 0;
+        current_palette_mode_ = false;
+    }
+    // Corners in local space, then rotated about the centre. Screen y grows
+    // downwards, so a positive angle turns clockwise on screen.
+    const float radians = degrees * 3.14159265358979f / 180.0f;
+    const float c = std::cos(radians);
+    const float s = std::sin(radians);
+    const float hw = w * 0.5f;
+    const float hh = h * 0.5f;
+    const float corners[4][2] = {{-hw, -hh}, {hw, -hh}, {-hw, hh}, {hw, hh}};
+    float x[4];
+    float y[4];
+    for (int i = 0; i < 4; ++i) {
+        x[i] = center_x + corners[i][0] * c - corners[i][1] * s;
+        y[i] = center_y + corners[i][0] * s + corners[i][1] * c;
+    }
+    const float u[4] = {0.0f, 1.0f, 0.0f, 1.0f};
+    const float v[4] = {0.0f, 0.0f, 1.0f, 1.0f};
+    const int order[6] = {0, 1, 2, 1, 3, 2};
+    for (int i : order) {
+        vertices_.push_back(x[i]);
+        vertices_.push_back(y[i]);
+        vertices_.push_back(u[i]);
+        vertices_.push_back(v[i]);
+        vertices_.push_back(color.r);
+        vertices_.push_back(color.g);
+        vertices_.push_back(color.b);
+        vertices_.push_back(color.a);
+    }
+}
+
 void SpriteBatch::drawRegion(const Texture &texture, float x, float y, float w, float h, float u0,
                              float v0, float u1, float v1, const Color &color, bool flip_x) {
     if (!texture.valid()) return;
@@ -301,31 +339,71 @@ bool BitmapFont::load(const std::string &tyf_text, const Image &atlas, SpriteBat
         glyph.u1 = static_cast<float>(record.number("u1"));
         glyph.v1 = static_cast<float>(record.number("v1"));
     }
+    measureInk(atlas);
     texture_ = batch->uploadRgba(atlas);
     return texture_.valid();
 }
 
-float BitmapFont::measure(const std::string &text, float scale) const {
+void BitmapFont::measureInk(const Image &atlas) {
+    const Glyph &h = glyphs_[static_cast<unsigned char>('H')];
+    metrics_ = FontMetrics{};
+    metrics_.cell_height = h.h > 0.0f ? h.h : 24.0f;
+    if (atlas.width <= 0 || atlas.height <= 0 || h.w <= 0.0f || h.h <= 0.0f) return;
+    const int x0 = static_cast<int>(h.u0 * atlas.width);
+    const int y0 = static_cast<int>(h.v0 * atlas.height);
+    const int x1 = static_cast<int>(std::lround(h.u1 * atlas.width));
+    const int y1 = static_cast<int>(std::lround(h.v1 * atlas.height));
+    int top = -1;
+    int bottom = -1;
+    for (int y = y0; y < y1 && y < atlas.height; ++y) {
+        for (int x = x0; x < x1 && x < atlas.width; ++x) {
+            const std::size_t index =
+                (static_cast<std::size_t>(y) * atlas.width + x) * 4 + 3;
+            if (index < atlas.rgba.size() && atlas.rgba[index] > 40) {
+                if (top < 0) top = y;
+                bottom = y;
+                break;
+            }
+        }
+    }
+    if (top < 0 || y1 <= y0) return;
+    const float cell_px = static_cast<float>(y1 - y0);
+    metrics_.ink_top = (top - y0) * h.h / cell_px;
+    metrics_.cap_height = (bottom - top + 1) * h.h / cell_px;
+    metrics_.measured = true;
+}
+
+float BitmapFont::measure(const std::string &text, float scale, float tracking) const {
     float width = 0.0f;
     for (char c : text) {
         const Glyph &glyph = glyphs_[static_cast<unsigned char>(c)];
-        width += (glyph.pre_space + glyph.w + glyph.post_space) * scale;
+        width += (glyph.pre_space + glyph.w + glyph.post_space + tracking) * scale;
     }
     return width;
 }
 
 void BitmapFont::draw(SpriteBatch *batch, float x, float y, float scale, const std::string &text,
-                      const Color &color) const {
+                      const Color &color, float tracking, float bold_px) const {
     if (batch == nullptr || !texture_.valid()) return;
+    // The stamps used for the faux-bold ring, in logical pixels.
+    static const float kRing[8][2] = {{1.0f, 0.0f},  {-1.0f, 0.0f}, {0.0f, 1.0f},  {0.0f, -1.0f},
+                                      {0.7f, 0.7f},  {-0.7f, 0.7f}, {0.7f, -0.7f}, {-0.7f, -0.7f}};
     float pen = x;
     for (char c : text) {
         const Glyph &glyph = glyphs_[static_cast<unsigned char>(c)];
         pen += glyph.pre_space * scale;
         if (glyph.w > 0.0f && glyph.h > 0.0f) {
+            if (bold_px > 0.0f) {
+                for (const auto &offset : kRing) {
+                    batch->drawRegion(texture_, pen + offset[0] * bold_px,
+                                      y + offset[1] * bold_px, glyph.w * scale, glyph.h * scale,
+                                      glyph.u0, glyph.v0, glyph.u1, glyph.v1, color);
+                }
+            }
             batch->drawRegion(texture_, pen, y, glyph.w * scale, glyph.h * scale, glyph.u0,
                               glyph.v0, glyph.u1, glyph.v1, color);
         }
-        pen += (glyph.w + glyph.post_space) * scale;
+        pen += (glyph.w + glyph.post_space + tracking) * scale;
     }
 }
 

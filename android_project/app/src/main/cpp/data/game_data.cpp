@@ -8,8 +8,13 @@ namespace {
 
 // The shipped roster folders (Contents/**/AllSuperStarTable*.sml is incomplete:
 // 11 of the 39 folders only exist on disk, so the list is authored here).
+// The order is the select screen's order: SuperstarScene fills its grid column
+// by column (slot n is column n / 2, row n % 2), and the reference page 1 shows
+// Jake Roberts over Randy Orton, John Cena over Randy Savage, Rey Mysterio over
+// Stone Cold and The Rock over The Undertaker - a legend paired with a modern
+// superstar in each column.
 const char *const kRosterFolders[] = {
-    "00_Jake the Snake", "00_John Cena", "00_Randy Orton", "00_Randy Savage",
+    "00_Jake the Snake", "00_Randy Orton", "00_John Cena", "00_Randy Savage",
     "00_Rey Mysterio", "00_Stone Cold", "00_The Rock", "00_Undertaker",
     "01_Big_Bossman", "01_CM punk", "01_Shawn_Michaels", "01_Sheamus", "01_TripleH",
     "02_Alberto Del Rio", "02_Sgt. Slaughter", "02_The Miz", "02_Yokozuna", "02_Zack Ryder",

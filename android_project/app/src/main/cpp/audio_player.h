@@ -29,6 +29,9 @@ public:
     // Play an asset with an independent player, so the short game cues can
     // overlap. Slots are pooled by the caller (see game/app.cpp).
     bool playAsset(AssetLoader* assets, const std::string& asset_path);
+    // Options menu: silence every cue without tearing the mixer down.
+    void setMuted(bool muted) { muted_ = muted; }
+    bool muted() const { return muted_; }
     void shutdown() noexcept;
 
 private:
@@ -48,6 +51,7 @@ private:
     Cue* cueFor(const std::string& asset_path);
     static bool decodeWav(const std::vector<std::uint8_t>& wav, std::vector<std::uint8_t>* pcm);
     std::unordered_map<std::string, std::unique_ptr<Cue>> cues_;
+    bool muted_ = false;
 
     SLObjectItf engine_object_ = nullptr;
     SLEngineItf engine_ = nullptr;

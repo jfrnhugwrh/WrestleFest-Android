@@ -20,6 +20,13 @@ $CXX $COMMON -DWRESTLEFEST_DATA_ROOT="\"$ASSETS/data/Data\"" \
     $DATA_SRC "$SRC/data/data_test.cpp" -o "$OUT/data_test"
 "$OUT/data_test"
 
+echo "== menu_layout_test"
+# menu_layout.h pulls in gl_sprite.h, so the GLES stub in tools/host_check is
+# what lets this compile on a machine without the NDK.
+$CXX $COMMON -Itools/host_check \
+    "$SRC"/game/menu_layout_test.cpp -o "$OUT/menu_layout_test"
+"$OUT/menu_layout_test"
+
 echo "== sim_test"
 $CXX $COMMON -DWRESTLEFEST_DATA_ROOT="\"$ASSETS/data/Data\"" \
     $DATA_SRC "$SRC"/sim/collision.cpp "$SRC"/sim/wrestler.cpp "$SRC"/sim/match.cpp \

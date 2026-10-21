@@ -5,12 +5,24 @@ same numbers as `game/game_renderer.cpp` (art scale, arena origin, sprite
 anchoring, depth order) plus the HUD and virtual pad. It exists because the host
 machine has no GPU: it is the only way to eyeball the placement without a device.
 
+It also draws the front-end screens, from the same shared geometry the game uses
+(`game/menu_layout.h`) and the same tyF font metrics, so a menu change can be
+checked against the reference screenshots without an APK:
+
 ```
 g++ -std=c++17 -O1 -Iandroid_project/app/src/main/cpp tools/preview/preview.cpp \
     android_project/app/src/main/cpp/data/{asset_source,game_data,sml_parser}.cpp \
     android_project/app/src/main/cpp/sim/collision.cpp \
     android_project/app/src/main/cpp/render/{image,zip_reader}.cpp \
     -Itools/host_check -o /tmp/preview -lz
+```
+
+`-lz` needs the zlib development package; on a machine that only has the
+runtime library, link `/lib/*/libz.so.1` (or `/usr/lib/*/libz.so.1`) directly.
+
+## In-ring view
+
+```
 /tmp/preview android_project/app/src/main/assets /tmp/preview.png "00_John Cena" "03_BigShow"
 ```
 
@@ -27,3 +39,32 @@ from `AllArenaTable.sml`, e.g. `ARENA03` Raw, `ARENA04` WrestleMania):
 
 Every `arena0.png` is 1482x678-679, so the one calibration in `game_renderer.cpp`
 holds for all eleven arena folders.
+
+## Front-end screens
+
+```
+/tmp/preview <assets> /tmp/main.png   --screen=main    [--selected=N]
+/tmp/preview <assets> /tmp/modes.png  --screen=modes   [--selected=N]
+/tmp/preview <assets> /tmp/select.png --screen=select  [--page=N] [--selected=SLOT]
+/tmp/preview <assets> /tmp/arena.png  --screen=arena   [--page=N] [--selected=SLOT]
+/tmp/preview <assets> /tmp/loading.png --screen=loading
+/tmp/preview <assets> /tmp/title.png   --screen=title
+```
+
+`--selected` is the highlighted row (main/modes) or card slot (selectors);
+`--page` is the zero-based page of the selector grids. The output is 960x640,
+the game's logical canvas.
+
+## Comparing with a screenshot of the original
+
+The captures of the original that the screens were matched against are not
+uniformly scaled: the back button (`back.png`, a square 78x78) comes out 68x57
+in them, so they are wider horizontally than vertically. Squash the preview by
+the capture's aspect ratio before comparing (`preview.png` resized from 960x640
+to the capture's size) rather than reading positions off a naive stretch.
+
+Even then the aspect is slightly different from one capture to the next, so the
+numbers in `game/menu_layout.h` are anchored on the parts of a screen that do
+not depend on it - the heights of the strips (which have no top/bottom in the
+art to stretch) and the horizontal widths of the captions - and on the
+original's own `tyCFontTT::Print` coordinates from `TitleMenu.cpp`.

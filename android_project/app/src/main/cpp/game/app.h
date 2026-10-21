@@ -4,7 +4,14 @@
 // The application shell: asset source, match flow, touch input and the fixed
 // 60 Hz simulation step (GAMEPLAY_IMPLEMENTATION 2.5).
 //
-// Flow mirrors the original: Title -> Superstar select -> Match -> Result.
+// Flow mirrors the original's front end (TitleMenu.cpp / TitleMenuMain.cpp):
+//
+//   Loading -> Title -> Main menu -> Game modes -> Superstar select
+//           -> Arena select -> Match -> Result
+//
+// with the options list hanging off the main menu and the pause menu over the
+// match. Every screen is drawn by MenuScreens; this class owns the state and
+// the transitions.
 
 #include "../asset_loader.h"
 #include "../data/game_data.h"
@@ -12,6 +19,7 @@
 #include "../sim/ai.h"
 #include "../sim/match.h"
 #include "game_renderer.h"
+#include "menu_screens.h"
 
 #include <memory>
 #include <string>
@@ -35,14 +43,13 @@ private:
 enum class Scene {
     Loading,
     Title,
+    MainMenu,
+    Modes,
     Select,
+    Arena,
+    Options,
     Match,
     Result,
-};
-
-struct TouchPoint {
-    float x = 0.0f;  // logical coordinates
-    float y = 0.0f;
 };
 
 class GameApp {
@@ -71,14 +78,31 @@ private:
     // Applies the selected arena art (falls back to the default arena).
     void applyArena();
     void stepSimulation(float dt);
-    void updateTouchInput();
-    void drawTitle();
-    void drawSelect();
-    void drawResult();
-    void drawTouchControls();
     void updateIntro(float dt);
     void drawIntroBanner();
+    void drawTouchControls();
     void drawPauseOverlay();
+    void drawResult();
+    void drawOptions();
+
+    // Front end.
+    void enterScene(Scene scene);
+    void updateMenus(float dt);
+    void handleMenuTap(float x, float y);
+    void handleMainMenuTap(float x, float y);
+    void handleModesTap(float x, float y);
+    void handleOptionsTap(float x, float y);
+    void handleSuperstarTap(float x, float y);
+    void handleArenaTap(float x, float y);
+    void startSelectedMatch();
+    void chooseOpponent();
+    void showNotice(const std::string &text);
+    int pageCount(int item_count, int per_page) const;
+    int pageOfSelection(int selection, int per_page) const;
+    // Page the selector grids should open on.
+    static int clampPage(int page, int page_count);
+    const WrestlerProfile *playerProfile() const;
+    const WrestlerProfile *opponentProfile() const;
 
     void playCue(const char *asset);
     void playRandomCue(const char *const *paths, int count, const char *tag);
@@ -88,6 +112,7 @@ private:
     LoaderAssetSource source_{nullptr};
     GameData data_;
     GameRenderer renderer_;
+    MenuScreens menu_;
     Match match_;
     std::unique_ptr<AiEntity> dummy_ai_;
     std::vector<InputFrame> inputs_;
@@ -106,8 +131,26 @@ private:
     float intro_stage_length_ = 0.0f;
 
     Scene scene_ = Scene::Loading;
-    bool ready_ = false;
+    bool ready_ = false;    // renderer up: the app can draw
+    bool data_ok_ = false;  // the SML tables loaded: the front end can advance
     std::string error_;
+    // The loading card stays up for a beat so the title does not snap in.
+    float loading_timer_ = 0.0f;
+
+    // Front-end selections, all indices into the tables.
+    int main_entry_ = 0;    // MainScene cursor
+    int mode_entry_ = 0;    // ModeScene cursor
+    int superstar_page_ = 0;
+    int arena_page_ = 0;
+    // Card that was just tapped; it stays highlighted while the next screen
+    // slides in, like the original's select-then-confirm.
+    int superstar_pick_ = -1;
+    int arena_pick_ = -1;
+    float confirm_timer_ = 0.0f;
+    bool confirm_action_ = false;
+    std::string notice_;
+    float notice_timer_ = 0.0f;
+    bool sound_on_ = true;
 
     int selected_player_ = 0;
     int selected_opponent_ = 1;

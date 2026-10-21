@@ -29,6 +29,7 @@ if(ANDROID)
 add_library(wrestlefest_render STATIC
     game/app.cpp
     game/game_renderer.cpp
+    game/menu_screens.cpp
     render/gl_sprite.cpp
     render/image.cpp
     render/zip_reader.cpp

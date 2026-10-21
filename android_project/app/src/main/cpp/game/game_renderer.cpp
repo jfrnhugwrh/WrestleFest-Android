@@ -1,5 +1,7 @@
 #include "game_renderer.h"
 
+#include "menu_layout.h"
+
 #include "../asset_loader.h"
 #include "../render/image.h"
 #include "../data/sml_parser.h"
@@ -37,19 +39,27 @@ bool GameRenderer::initialize(AssetLoader *assets, const GameData *data) {
     }
     white_ = batch_.uploadWhite();
 
-    // Font: tyF descriptor + its atlas PNG.
-    std::vector<std::uint8_t> tyf;
-    std::vector<std::uint8_t> atlas_bytes;
-    if (assets_ != nullptr &&
-        assets_->readAsset("graphics/Fonts/Arial Rounded MT Bold.tyF", &tyf) &&
-        assets_->readAsset("graphics/Fonts/Arial Rounded MT Bold.png", &atlas_bytes)) {
-        Image atlas;
-        if (decodePng(atlas_bytes.data(), atlas_bytes.size(), &atlas)) {
-            if (!font_.load(std::string(tyf.begin(), tyf.end()), atlas, &batch_)) {
-                __android_log_print(ANDROID_LOG_WARN, kLogTag, "font parse failed");
-            }
+    // Fonts: two tyF descriptors and their atlas PNGs. Arial Rounded MT Bold is
+    // the body face (HUD, prompts, card labels); Century Gothic is the menu face
+    // the front end and the reference screens use.
+    auto loadFont = [&](const char *name, BitmapFont *font) {
+        std::vector<std::uint8_t> tyf;
+        std::vector<std::uint8_t> atlas_bytes;
+        const std::string base = std::string("graphics/Fonts/") + name;
+        if (assets_ == nullptr || !assets_->readAsset(base + ".tyF", &tyf) ||
+            !assets_->readAsset(base + ".png", &atlas_bytes)) {
+            __android_log_print(ANDROID_LOG_WARN, kLogTag, "font %s missing", name);
+            return;
         }
-    }
+        Image atlas;
+        if (!decodePng(atlas_bytes.data(), atlas_bytes.size(), &atlas)) return;
+        if (!font->load(std::string(tyf.begin(), tyf.end()), atlas, &batch_)) {
+            __android_log_print(ANDROID_LOG_WARN, kLogTag, "font %s parse failed", name);
+        }
+    };
+    loadFont("Arial Rounded MT Bold", &font_);
+    loadFont("Century Gothic", &menu_font_);
+    if (!menu_font_.valid()) menu_font_ = font_;
 
     loadUi();
     loadReferee();
@@ -82,13 +92,28 @@ void GameRenderer::shutdown() {
     if (button_red_icon_.valid()) glDeleteTextures(1, &button_red_icon_.id);
     if (button_blue_icon_.valid()) glDeleteTextures(1, &button_blue_icon_.id);
     if (stick_arrows_.valid()) glDeleteTextures(1, &stick_arrows_.id);
-    for (Texture *texture : {&ui_background_, &title_logo_, &tap_to_start_, &superstar_frame_,
-                             &superstar_select_, &arrow_previous_, &arrow_next_, &arrow_point_,
-                             &button_strip_, &pause_button_, &pause_button_pressed_,
-                             &pause_background_, &pause_menu_button_, &report_frame_,
-                             &report_background_}) {
+    for (Texture *texture : {&ui_background_, &ui_background_2_, &title_logo_, &tap_to_start_,
+                             &superstar_frame_, &superstar_select_, &arena_frame_, &arena_select_,
+                             &wwe_logo_, &back_button_, &arrow_previous_, &arrow_next_,
+                             &arrow_point_, &arrow_point_select_, &button_strip_, &pause_button_,
+                             &pause_button_pressed_, &pause_background_, &pause_menu_button_,
+                             &report_frame_, &report_background_}) {
         if (texture->valid()) glDeleteTextures(1, &texture->id);
     }
+    for (Texture &texture : main_button_) {
+        if (texture.valid()) glDeleteTextures(1, &texture.id);
+    }
+    for (Texture &texture : mode_button_) {
+        if (texture.valid()) glDeleteTextures(1, &texture.id);
+    }
+    for (auto &entry : avatars_) {
+        if (entry.second.valid()) glDeleteTextures(1, &entry.second.id);
+    }
+    for (auto &entry : arena_scenes_) {
+        if (entry.second.valid()) glDeleteTextures(1, &entry.second.id);
+    }
+    avatars_.clear();
+    arena_scenes_.clear();
     for (auto &bundle : bundles_) {
         for (auto &entry : bundle.second.textures) {
             if (entry.second.indices.valid()) glDeleteTextures(1, &entry.second.indices.id);
@@ -186,15 +211,31 @@ bool GameRenderer::loadUi() {
     // Directional hints around the stick come straight from the manual sheet.
     load("ui/Sprites/UI/hint/Arrow.png", &stick_arrows_);
 
-    // Front-end.
+    // Front-end. Three backdrops ship with the game: the main menu uses
+    // background.png, the select screens background_2.png (background_3.png is
+    // the shop/promotion backdrop).
     load("ui/Sprites/UI/background.png", &ui_background_);
+    load("ui/Sprites/UI/background_2.png", &ui_background_2_);
     load("ui/Sprites/UI/title_menu/title.png", &title_logo_);
     load("ui/Sprites/UI/title_menu/taptostart_en.png", &tap_to_start_);
     load("ui/Sprites/UI/selector/superstar_frame.png", &superstar_frame_);
     load("ui/Sprites/UI/selector/superstar_select.png", &superstar_select_);
+    load("ui/Sprites/UI/selector/arena_frame.png", &arena_frame_);
+    load("ui/Sprites/UI/selector/arena_select.png", &arena_select_);
     load("ui/Sprites/UI/selector/previous.png", &arrow_previous_);
     load("ui/Sprites/UI/selector/next.png", &arrow_next_);
     load("ui/Sprites/UI/selector/point.png", &arrow_point_);
+    load("ui/Sprites/UI/selector/point_select.png", &arrow_point_select_);
+    // The four main-menu strips and the six mode strips: the art is one long
+    // plate per button, so each row gets its own texture.
+    for (int i = 0; i < 4; ++i) {
+        load("ui/Sprites/UI/main_menu/main_button_" + toString(i) + ".png", &main_button_[i]);
+    }
+    for (int i = 0; i < 6; ++i) {
+        load("ui/Sprites/UI/main_menu/mode_button_" + toString(i) + ".png", &mode_button_[i]);
+    }
+    load("ui/Sprites/UI/title_menu/wwe_logo_for_shop.png", &wwe_logo_);
+    load("ui/Sprites/UI/back.png", &back_button_);
     load("ui/Sprites/UI/main_menu/main_button_0.png", &button_strip_);
     load("graphics/Sprites/virtual_pad/pause_btn.png", &pause_button_);
     load("graphics/Sprites/virtual_pad/pause_btn_clicked.png", &pause_button_pressed_);
@@ -661,6 +702,66 @@ void GameRenderer::drawTextCentered(const std::string &text, float center_x, flo
                                     const Color &color) {
     const float width = font_.measure(text, scale);
     font_.draw(&batch_, center_x - width * 0.5f, y, scale, text, color);
+}
+
+void GameRenderer::drawMenuText(const std::string &text, float x, float ink_top, float size,
+                                const Color &color, float tracking, float shadow_offset) {
+    const FontMetrics &metrics = menu_font_.metrics();
+    const float scale = menu::scaleForSize(metrics, size);
+    const float y = menu::inkTopToCellTop(metrics, ink_top, size);
+    if (shadow_offset > 0.0f) {
+        menu_font_.draw(&batch_, x + shadow_offset, y + shadow_offset, scale, text,
+                        Color{0.0f, 0.0f, 0.0f, 0.62f * color.a}, tracking);
+    }
+    // menu::kBoldPx is 0: the reference captions are the plain atlas with the
+    // single drop shadow above. Anything heavier reads as a different face.
+    menu_font_.draw(&batch_, x, y, scale, text, color, tracking, menu::kBoldPx);
+}
+
+void GameRenderer::drawMenuTextCentered(const std::string &text, float center_x, float ink_top,
+                                        float size, const Color &color, float tracking,
+                                        float shadow_offset) {
+    drawMenuText(text, center_x - measureMenuText(text, size, tracking), ink_top, size, color,
+                 tracking, shadow_offset);
+}
+
+float GameRenderer::measureMenuText(const std::string &text, float size, float tracking) const {
+    const FontMetrics &metrics = menu_font_.metrics();
+    return menu_font_.measure(text, menu::scaleForSize(metrics, size), tracking);
+}
+
+void GameRenderer::drawRotated(const Texture &texture, float center_x, float center_y, float w,
+                               float h, float degrees, const Color &color) {
+    batch_.drawRotated(texture, center_x, center_y, w, h, degrees, color);
+}
+
+const Texture &GameRenderer::avatarFor(const std::string &wrestler_folder) {
+    auto cached = avatars_.find(wrestler_folder);
+    if (cached != avatars_.end()) return cached->second;
+    Texture texture;
+    std::vector<std::uint8_t> bytes;
+    Image image;
+    const std::string path =
+        "graphics/Sprites/Character/" + wrestler_folder + "/avatar.png";
+    if (assets_ != nullptr && assets_->readAsset(path, &bytes) &&
+        decodePng(bytes.data(), bytes.size(), &image)) {
+        texture = batch_.uploadRgba(image);
+    }
+    return avatars_.emplace(wrestler_folder, texture).first->second;
+}
+
+const Texture &GameRenderer::arenaSceneFor(const std::string &arena_folder) {
+    auto cached = arena_scenes_.find(arena_folder);
+    if (cached != arena_scenes_.end()) return cached->second;
+    Texture texture;
+    std::vector<std::uint8_t> bytes;
+    Image image;
+    const std::string path = "graphics/Sprites/Arena/" + arena_folder + "/scene.png";
+    if (assets_ != nullptr && assets_->readAsset(path, &bytes) &&
+        decodePng(bytes.data(), bytes.size(), &image)) {
+        texture = batch_.uploadRgba(image);
+    }
+    return arena_scenes_.emplace(arena_folder, texture).first->second;
 }
 
 }  // namespace wrestlefest
