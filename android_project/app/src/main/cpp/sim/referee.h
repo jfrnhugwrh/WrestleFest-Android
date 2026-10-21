@@ -38,6 +38,12 @@ public:
     int count() const { return count_; }
     int maxCount() const { return max_count_; }
     bool counting() const { return master_ == RefMaster::Move && sub_ == RefSub::PinCount; }
+    // True when the referee is heading to (or already counting) the pin of this
+    // wrestler. Mirrors the original's HandleBePinned gate: the pinned man's
+    // mash counter does not run until the referee has noticed the fall.
+    bool watchingPinFor(int wrestler) const {
+        return master_ == RefMaster::Move && sub_ == RefSub::PinCount && watched_actor_ == wrestler;
+    }
     float reactionDelay() const { return reaction_delay_; }
 
 private:

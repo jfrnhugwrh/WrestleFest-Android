@@ -35,10 +35,50 @@ original's 300 px rope force is measured in its own (wider) ring space; at the
 960x640 logical scale it would cover the whole trapezoid and make every clinch
 an automatic win, so it is clamped to 90 px (`tuning.h` documents this).
 
-An empty energy bar is a loss (`Match::checkExhausted`): without it a wrestler
-drained to zero can sit in `STAND_TIRED` forever - a Rumble cannot pin him, so
-the match would never end. This was the reason six-man Rumbles used to run
-until the test cap without a winner; they now play out in ~3-4 minutes.
+An empty energy bar is a loss only when the rule cannot pin
+(`Match::checkExhausted` is gated on `!rule.can_pin`): in a Rumble an
+exhausted wrestler is knocked out, and six-man Rumbles play out in ~2-3
+minutes. In 1 VS 1 / tag an empty bar means "pinnable": the man lies on the
+mat until somebody covers him, which is exactly how the original ends those
+matches.
+
+Pins are a button action (blue), like the original's
+`HandleOpponentOnGround`: with the opponent down and under his GBH energy
+threshold (24), the blue press dives on him (`JUMP_FOR_PIN -> PIN ->
+PINNING/BE_PINNED`), the referee walks over and counts 1-2-3. The victim
+mashes real presses (held buttons counted as presses was what made every pin
+a 0.25 s escape; press goals come from `ButtonCountTable` as before, +5 per
+cover on the same man, so a beating converges to a fall). Cradle throws
+(`FISHERMAN_SUPLEX`, `PERFECT_PLEX`, i.e. the `USE_F_WS_PIN` /
+`BE_USED_F_WS_PIN` exits) become the cover themselves. Kicking out plays
+`PUSHOFF`, which the state table pairs with shoving the pinner airborne, and
+heals the kick-out bonus from the damage table.
+
+Animation/state-machine bugs fixed in the same pass:
+
+* `BE_USED_*` victims used to self-advance through `tickMoveStates`, popping
+  back to `IDLE` in the middle of any throw whose paired clip was shorter
+  than the attacker's (Rock Bottom: 16 vs 10 frames) and sometimes re-applying
+  the attacker's damage. Victim states are now owner-driven
+  (`Wrestler::tickVictimHold`): the pose holds until the owner routes him out,
+  with a 3 s desync failsafe for multi-man matches.
+* A pending strike/move impact could survive a state change: `changeState`
+  now clears the impact/hurt clocks, so an interrupted move can no longer
+  damage an unrelated passerby.
+* Jab-vs-grounded-victim mixups: a downed man hit by a punch used to be
+  popped back to his feet (`isDown()` was tested on the attacker); strikes
+  now whiff on downed targets and the victim's own posture decides the
+  reaction.
+* Paired-move table anims now apply their `Facing` multiplier (SNAPMARE and
+  similar played mirrored before) and seat the pair through
+  `AdjustOpponentXZ` (anim `xOffset`/`OpposingFacing`), not a fixed 60 px.
+* Two standing wrestlers could stack into one sprite: a body-separation pass
+  keeps them at arm's length (`kBodySeparation`), which also stops the old
+  "both at dx==0 jabbing each other, no grapple ever" stalemate.
+* The AI pressed the grapple from punch range (110+) while the clinch needs
+  ~100 px and dropped the press when `dx==0`, so tags/rumbles/1v1s mostly
+  never grappled: 1 grapple win in a 6-minute match, matches decided on the
+  clock. It now closes in and presses with a direction even at `dx == 0`.
 
 `sim/actor.h` is `CActor` (x/y/z, facing, the 4-deep state stack, energy,
 energy_display ghost bar, motion power, power-up). `sim/wrestler.cpp` is
@@ -52,14 +92,16 @@ looping locomotion states.
 `Wrestler::collisionRange()`; only the documented fallbacks remain literals.
 
 Verified by `sim_test`: reaction beats, the 51/101 grapple roll (and the
-~94.6 % Rumble variant), the ghost bar rate, a full AI-vs-AI 1v1 to a decision
-(360 s, ~600 hits, 2 pins), a looping animation clock, and seed determinism.
+~94.6 % Rumble variant), the ghost bar rate, a full AI-vs-AI 1v1 to a
+decision (by pinfall in ~70 s with real covers), a looping animation clock,
+the manual pin / kick-out / pin-gate / cradle-pin flows, paired-move victim
+sync, held-vs-press mashing, body separation, and seed determinism.
 
 ## Phase 3 - Rules, referee, AI (done for 1v1, tag and rumble)
 
 `sim/match.*` owns the frame order of the original (actors, then AI, then
-referee/counts, then the win check), the opponent targeting, the pin gate and
-cooldown, the outside count, the rule timer/decision, and the Royal Rumble
+referee/counts, then the win check), the opponent targeting, the body
+separation, the outside count, the rule timer/decision, and the Royal Rumble
 toss-out (the loser of a clinch at the ropes) + last-man-standing win
 condition. The Rumble also staggers its
 entrants: `enableStaggeredEntry(interval, initial)` parks everyone past the

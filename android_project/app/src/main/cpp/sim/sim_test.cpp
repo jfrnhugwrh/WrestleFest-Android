@@ -357,6 +357,9 @@ int main(int argc, char **argv) {
     {
         // Two men start, the rest walk in one at a time. Until the last entrant
         // has arrived nobody can win, even if only one is left standing.
+        // Only the staging is under test here: with five live AIs trading
+        // grapples, fatigue-outs can legitimately end the rumble before the
+        // last entrant walks in, so keep everyone passive.
         Match match;
         match.configure(&data, ring, 2, 0x2468u);
         match.allowAutoStart(false);
@@ -365,6 +368,7 @@ int main(int argc, char **argv) {
         for (int i = 0; i < 5; ++i) {
             match.addWrestler(data.wrestlerByFolder(folders[i]), i,
                               ring.centerX() - 120.0f + 80.0f * i, ring.centerZ(), 1.0f);
+            match.setAiControlled(i, false);
         }
         match.enableStaggeredEntry(4.0f, 2);
         check(match.waitingEntrants() == 3, "three entrants are waiting in the aisle");
@@ -598,6 +602,329 @@ int main(int argc, char **argv) {
         const RuleInfo *tag = data.rule(1);
         check(tag != nullptr && std::fabs(tag->max_match_time - 720.0f) < 0.01f,
               "the tag match runs on the 2 VS 2 clock");
+    }
+
+    // ------------------------------------------------------------------
+    std::printf("[manual pin flow]\n");
+    {
+        // The player's pin: blue button next to a downed, drained opponent ->
+        // dive -> cover -> referee three-count -> pinfall. This is the flow the
+        // original exposes via HandleOpponentOnGround and the auto-pin gate
+        // could never reach (a wrestler at 0 energy was KOd instantly instead).
+        Match match;
+        match.configure(&data, ring, 0, 0xbeefu);
+        match.addWrestler(data.wrestlerByFolder("00_John Cena"), 0,
+                          ring.centerX() - 60.0f, ring.centerZ(), 1.0f);
+        match.addWrestler(data.wrestlerByFolder("03_BigShow"), 1,
+                          ring.centerX(), ring.centerZ(), -1.0f);
+        match.setAiControlled(0, false);
+        match.setAiControlled(1, false);
+        match.start();
+        Wrestler *attacker = match.wrestler(0);
+        Wrestler *victim = match.wrestler(1);
+        // Drain and floor the victim.
+        victim->energy = 10.0f;
+        victim->energy_display = 10.0f;
+        victim->changeState(state::ONGROUND, 0, match);
+        check(attacker->pinWindowOpen(*victim, match), "the pin window is open on a drained man");
+
+        std::vector<InputFrame> inputs(2);
+        inputs[0].btn1 = true;
+        inputs[0].btn1_edge = true;
+        match.update(1.0f / 60.0f, inputs);
+        match.clearEvents();
+        inputs[0].btn1 = false;
+        inputs[0].btn1_edge = false;
+        check(attacker->subState() == state::JUMP_FOR_PIN, "blue press next to him starts the dive");
+
+        bool pinning_seen = false;
+        int last_count = 0;
+        float seconds = 0.0f;
+        while (match.phase() != MatchPhase::Finished && seconds < 15.0f) {
+            match.update(1.0f / 60.0f, inputs);
+            seconds += 1.0f / 60.0f;
+            if (attacker->subState() == state::PINNING && victim->pinned) pinning_seen = true;
+            for (const SimEvent &event : match.events()) {
+                if (event.type == EventType::RefCount) {
+                    last_count = std::max(last_count, static_cast<int>(event.value + 0.5f));
+                }
+            }
+            match.clearEvents();
+        }
+        check(pinning_seen, "the dive ends in the cover hold (PINNING/BE_PINNED)");
+        check(last_count == 3, "the referee counts all three");
+        check(match.phase() == MatchPhase::Finished && match.winnerTeam() == 0,
+              "the cover wins by pinfall");
+    }
+
+    // ------------------------------------------------------------------
+    std::printf("[pin kick-out]\n");
+    {
+        // Mashing real presses breaks the cover before three: the kicker goes
+        // to PUSHOFF (which shoves the pinner off), heals the kick-out bonus,
+        // and the match continues.
+        Match match;
+        match.configure(&data, ring, 0, 0xf00du);
+        match.addWrestler(data.wrestlerByFolder("00_John Cena"), 0,
+                          ring.centerX() - 60.0f, ring.centerZ(), 1.0f);
+        match.addWrestler(data.wrestlerByFolder("03_BigShow"), 1,
+                          ring.centerX(), ring.centerZ(), -1.0f);
+        match.setAiControlled(0, false);
+        match.setAiControlled(1, false);
+        match.start();
+        Wrestler *attacker = match.wrestler(0);
+        Wrestler *victim = match.wrestler(1);
+        victim->energy = 10.0f;
+        victim->energy_display = 10.0f;
+        victim->changeState(state::ONGROUND, 0, match);
+
+        std::vector<InputFrame> inputs(2);
+        inputs[0].btn1 = true;
+        inputs[0].btn1_edge = true;
+        match.update(1.0f / 60.0f, inputs);
+        match.clearEvents();
+        inputs[0].btn1 = false;
+        inputs[0].btn1_edge = false;
+
+        bool kicked_out = false;
+        float seconds = 0.0f;
+        while (!kicked_out && seconds < 10.0f && match.phase() != MatchPhase::Finished) {
+            if (victim->subState() == state::BE_PINNED) {
+                // Real presses, not holds.
+                inputs[1].btn0_edge = true;
+                inputs[1].btn1_edge = true;
+            }
+            match.update(1.0f / 60.0f, inputs);
+            seconds += 1.0f / 60.0f;
+            for (const SimEvent &event : match.events()) {
+                if (event.type == EventType::KickOut && event.actor == victim->id()) kicked_out = true;
+            }
+            match.clearEvents();
+            inputs[1] = InputFrame{};
+        }
+        check(kicked_out, "mashing kicks out of the cover");
+        check(!victim->pinned, "the pinned flag clears on the kick out");
+        check(attacker->subState() != state::PINNING, "the pinner is shoved off");
+        check(match.phase() != MatchPhase::Finished, "a kicked-out pin does not end the match");
+    }
+
+    // ------------------------------------------------------------------
+    std::printf("[pin gate on healthy opponent]\n");
+    {
+        // Blue next to a downed but HEALHTY opponent must not start a pin -
+        // the original gates the cover on the victim's GBH energy threshold.
+        Match match;
+        match.configure(&data, ring, 0, 0xabcu);
+        match.addWrestler(data.wrestlerByFolder("00_John Cena"), 0,
+                          ring.centerX() - 60.0f, ring.centerZ(), 1.0f);
+        match.addWrestler(data.wrestlerByFolder("03_BigShow"), 1,
+                          ring.centerX(), ring.centerZ(), -1.0f);
+        match.setAiControlled(0, false);
+        match.setAiControlled(1, false);
+        match.start();
+        Wrestler *attacker = match.wrestler(0);
+        Wrestler *victim = match.wrestler(1);
+        victim->changeState(state::ONGROUND, 0, match);
+        check(!attacker->pinWindowOpen(*victim, match), "a healthy man cannot be pinned");
+        std::vector<InputFrame> inputs(2);
+        inputs[0].btn1 = true;
+        inputs[0].btn1_edge = true;
+        for (int i = 0; i < 30; ++i) match.update(1.0f / 60.0f, inputs);
+        check(attacker->subState() != state::JUMP_FOR_PIN &&
+                  attacker->subState() != state::PINNING,
+              "blue on a healthy downed man does not dive");
+        check(!victim->pinned, "no pin on a healthy man");
+    }
+
+    // ------------------------------------------------------------------
+    std::printf("[paired move sync]\n");
+    {
+        // Regression for the desync: the victim's clip is often shorter than
+        // the attacker's (Rock Bottom is 16 vs 10 frames). The victim must
+        // hold the pose until the OWNER routes him out - never pop to IDLE in
+        // the middle of the throw.
+        const MoveInfo *picked = nullptr;
+        for (const MoveInfo &candidate : data.moves()) {
+            if (candidate.entry_state != state::USE_F_WS) continue;
+            const ForceMove *force = data.forceMove(candidate.sub_type_id);
+            if (force == nullptr) continue;
+            // Only throws with a mat-style finish: cradle/aerial families have
+            // their own dedicated exit handling (pin holds, flat backs).
+            if (force->on_exit_opponent_state != state::SLAMMED &&
+                force->on_exit_opponent_state != state::KNOCKED_BACK &&
+                force->on_exit_opponent_state != state::ONGROUND) {
+                continue;
+            }
+            const AnimInfo *a = data.animInfo(force->anim_id);
+            const AnimInfo *v = data.animInfo(force->opponent_anim_id);
+            if (a == nullptr || v == nullptr) continue;
+            if (a->frame_count != v->frame_count) {
+                picked = &candidate;
+                break;
+            }
+        }
+        check(picked != nullptr, "an asymmetric paired move exists in the tables");
+        if (picked != nullptr) {
+            Match match;
+            match.configure(&data, ring, 0, 0x7u);
+            match.addWrestler(data.wrestlerByFolder("00_John Cena"), 0,
+                              ring.centerX() - 40.0f, ring.centerZ(), 1.0f);
+            match.addWrestler(data.wrestlerByFolder("03_BigShow"), 1,
+                              ring.centerX() + 40.0f, ring.centerZ(), -1.0f);
+            match.setAiControlled(0, false);
+            match.setAiControlled(1, false);
+            match.start();
+            Wrestler *attacker = match.wrestler(0);
+            Wrestler *victim = match.wrestler(1);
+            attacker->setOpponent(1);
+            victim->setOpponent(0);
+            attacker->beginMove(picked->id);
+            attacker->useWrestleStyle(*picked, match);
+            check(attacker->subState() == state::USE_F_WS, "the attacker owns the move state");
+            check(victim->subState() == state::BE_USED_F_WS, "the victim owns the victim state");
+
+            std::vector<InputFrame> idle(2);
+            bool desync = false;
+            int hits_on_victim = 0;
+            for (int step = 0; step < 60 * 6; ++step) {
+                match.update(1.0f / 60.0f, idle);
+                for (const SimEvent &event : match.events()) {
+                    if (event.type == EventType::Hit && event.other == 1) ++hits_on_victim;
+                }
+                match.clearEvents();
+                if (attacker->subState() == state::USE_F_WS &&
+                    victim->subState() != state::BE_USED_F_WS) {
+                    desync = true;
+                    break;
+                }
+                if (victim->subState() == state::IDLE) {
+                    desync = true;
+                    break;
+                }
+                if (victim->subState() == state::ONGROUND &&
+                    attacker->subState() != state::USE_F_WS) {
+                    break;  // move completed: victim on the mat, attacker done
+                }
+            }
+            check(!desync, "the victim holds the pose for the whole throw (no mid-move pop)");
+            check(hits_on_victim == 1, "the throw damages the victim exactly once");
+        }
+    }
+
+    // ------------------------------------------------------------------
+    std::printf("[cradle pin move]\n");
+    {
+        // FISHERMAN_SUPLEX / PERFECT_PLEX route the pair to USE_F_WS_PIN /
+        // BE_USED_F_WS_PIN: the throw itself is the cover. The ref must come
+        // and count; the pinned man mashes out like any other pin.
+        const MoveInfo *fisherman = data.moveInfo(22);  // WS_FISHERMAN_SUPLEX
+        check(fisherman != nullptr && fisherman->entry_state == state::USE_F_WS,
+              "FISHERMAN_SUPLEX is a throw");
+        if (fisherman != nullptr) {
+            Match match;
+            match.configure(&data, ring, 0, 0x513u);
+            match.addWrestler(data.wrestlerByFolder("00_John Cena"), 0,
+                              ring.centerX() - 40.0f, ring.centerZ(), 1.0f);
+            match.addWrestler(data.wrestlerByFolder("03_BigShow"), 1,
+                              ring.centerX() + 40.0f, ring.centerZ(), -1.0f);
+            match.setAiControlled(0, false);
+            match.setAiControlled(1, false);
+            match.start();
+            Wrestler *attacker = match.wrestler(0);
+            Wrestler *victim = match.wrestler(1);
+            attacker->setOpponent(1);
+            victim->setOpponent(0);
+            attacker->beginMove(fisherman->id);
+            attacker->useWrestleStyle(*fisherman, match);
+
+            std::vector<InputFrame> idle(2);
+            bool cradle = false;
+            bool pinned_flag = false;
+            int last_count = 0;
+            float seconds = 0.0f;
+            while (match.phase() != MatchPhase::Finished && seconds < 15.0f) {
+                match.update(1.0f / 60.0f, idle);
+                seconds += 1.0f / 60.0f;
+                if (attacker->subState() == state::USE_F_WS_PIN &&
+                    victim->subState() == state::BE_USED_F_WS_PIN) {
+                    cradle = true;
+                }
+                if (victim->pinned) pinned_flag = true;
+                for (const SimEvent &event : match.events()) {
+                    if (event.type == EventType::RefCount) {
+                        last_count = std::max(last_count, static_cast<int>(event.value + 0.5f));
+                    }
+                }
+                match.clearEvents();
+            }
+            check(cradle, "the pair settles in the cradle pin states (61/63)");
+            check(pinned_flag, "the cradle raise the pinned flag for the referee");
+            check(last_count == 3, "the cradle pin is counted to three");
+            check(match.phase() == MatchPhase::Finished && match.winnerTeam() == 0,
+                  "the cradle pin wins by pinfall");
+        }
+    }
+
+    // ------------------------------------------------------------------
+    std::printf("[get-up mash needs real presses]\n");
+    {
+        // Holding a button never mashing anything was THE pin/get-up bug:
+        // 100 held frames used to beat the 100-press can't-get-up row in 1.7 s.
+        // Now only edges count.
+        Match match;
+        match.configure(&data, ring, 0, 0x1ceu);
+        match.addWrestler(data.wrestlerByFolder("00_John Cena"), 0,
+                          ring.centerX() - 40.0f, ring.centerZ(), 1.0f);
+        match.addWrestler(data.wrestlerByFolder("03_BigShow"), 1,
+                          ring.centerX() + 40.0f, ring.centerZ(), -1.0f);
+        match.setAiControlled(0, false);
+        match.setAiControlled(1, false);
+        match.start();
+        Wrestler *downed = match.wrestler(0);
+        downed->energy = 60.0f;  // ONGROUND button goal 4
+        downed->changeState(state::ONGROUND, 0, match);
+
+        std::vector<InputFrame> held(2);
+        held[0].btn0 = true;  // held, no edges
+        float seconds = 0.0f;
+        while (downed->subState() == state::ONGROUND && seconds < 2.0f) {
+            match.update(1.0f / 60.0f, held);
+            match.clearEvents();
+            seconds += 1.0f / 60.0f;
+        }
+        check(downed->subState() == state::ONGROUND, "holding the button does not get him up");
+        check(downed->button_count == 0, "held frames add nothing to the counter");
+
+        for (int press = 0; press < 4; ++press) {
+            std::vector<InputFrame> edge(2);
+            edge[0].btn0 = true;
+            edge[0].btn0_edge = true;
+            match.update(1.0f / 60.0f, edge);
+            match.update(1.0f / 60.0f, held);  // release the edge next frame
+            match.clearEvents();
+        }
+        check(downed->subState() == state::STANDUP || downed->subState() == state::IDLE,
+              "four real presses get him up at 60 energy");
+    }
+
+    // ------------------------------------------------------------------
+    std::printf("[body separation]\n");
+    {
+        // Two standing wrestlers are kept at arm's length - stacking into one
+        // sprite was what made grapples impossible (and looked like a jitter).
+        Match match;
+        match.configure(&data, ring, 0, 0x5e9u);
+        match.addWrestler(data.wrestlerByFolder("00_John Cena"), 0,
+                          ring.centerX() - 10.0f, ring.centerZ(), 1.0f);
+        match.addWrestler(data.wrestlerByFolder("03_BigShow"), 1,
+                          ring.centerX() + 10.0f, ring.centerZ(), -1.0f);
+        match.setAiControlled(0, false);
+        match.setAiControlled(1, false);
+        match.start();
+        std::vector<InputFrame> idle(2);
+        for (int step = 0; step < 30; ++step) match.update(1.0f / 60.0f, idle);
+        const float gap = std::fabs(match.wrestler(1)->x - match.wrestler(0)->x);
+        check(gap >= tuning::kBodySeparation - 0.5f, "standing wrestlers separate");
     }
 
     // ------------------------------------------------------------------

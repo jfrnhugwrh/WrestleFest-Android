@@ -96,6 +96,8 @@ enum : int {
     USE_SB_WS = 70,
     USE_TB_WS = 74,
     USE_TA_WS = 77,
+    LO_TH_PRESS = 83,      // bear-hug lift (low-tech press family)
+    LO_TH_PRESSED = 84,    // victim of the bear-hug lift
     PINNING = 85,
     BE_PINNED = 86,
     ONGROUND_HURT = 87,
