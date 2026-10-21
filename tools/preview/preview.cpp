@@ -484,24 +484,18 @@ struct MenuPreview {
             const float ink_top = y + menu::centreInBox(font.metrics, 0.0f,
                                                         menu::kMainStripHeight,
                                                         menu::kMainLabelSize);
-            if (menu::mainEntryLeftAligned(i)) {
-                const float scale = menu::scaleForSize(font.metrics, menu::kMainLabelSize);
-                const float shadow_color[4] = {0.0f, 0.0f, 0.0f, 0.75f};
-                font.draw(canvas, menu::kShopLabelX + menu::kLabelShadow,
-                          menu::inkTopToCellTop(font.metrics, ink_top, menu::kMainLabelSize) +
-                              menu::kLabelShadow,
-                          scale, menu::mainEntryLabel(i), shadow_color, menu::kLabelTracking);
-                font.draw(canvas, menu::kShopLabelX,
-                          menu::inkTopToCellTop(font.metrics, ink_top, menu::kMainLabelSize), scale,
-                          menu::mainEntryLabel(i), color, menu::kLabelTracking);
-            } else {
-                caption(menu::mainEntryLabel(i), 480.0f, ink_top, menu::kMainLabelSize, color);
-            }
+            caption(menu::mainEntryLabel(i), 480.0f, ink_top, menu::kMainLabelSize, color);
         }
         Image wwe;
         if (image("ui/Sprites/UI/title_menu/wwe_logo_for_shop.png", &wwe)) {
-            canvas.blit(wwe.rgba, wwe.width, wwe.height, menu::kWweLogoX, menu::kWweLogoY,
-                        wwe.width * menu::kWweLogoScale, wwe.height * menu::kWweLogoScale, false);
+            // Sits left of the centred SHOP caption, as in the game.
+            const float shop_width = font.measure(menu::mainEntryLabel(2),
+                                                  menu::scaleForSize(font.metrics,
+                                                                     menu::kMainLabelSize),
+                                                  menu::kLabelTracking);
+            canvas.blit(wwe.rgba, wwe.width, wwe.height, menu::wweLogoX(shop_width),
+                        menu::kWweLogoY, menu::kWweLogoWidth,
+                        wwe.height * menu::kWweLogoScale, false);
         }
         backButton(0.5f);
     }
@@ -555,10 +549,15 @@ struct MenuPreview {
             }
             Image avatar;
             if (image("graphics/Sprites/Character/" + profile.folder + "/avatar.png", &avatar)) {
-                const menu::Placement place = menu::avatarPlacement(
+                const menu::CoverCrop crop = menu::avatarCrop(
                     static_cast<float>(avatar.width), static_cast<float>(avatar.height));
-                canvas.blit(avatar.rgba, avatar.width, avatar.height, x + place.x, y + place.y,
-                            place.width, place.height, false);
+                canvas.blitRegion(avatar.rgba, avatar.width, avatar.height,
+                                  static_cast<int>(crop.u0 * avatar.width + 0.5f),
+                                  static_cast<int>(crop.v0 * avatar.height + 0.5f),
+                                  static_cast<int>((crop.u1 - crop.u0) * avatar.width + 0.5f),
+                                  static_cast<int>((crop.v1 - crop.v0) * avatar.height + 0.5f),
+                                  x + menu::kAvatarWindowX, y + menu::kAvatarWindowY,
+                                  menu::kAvatarWindowSize, menu::kAvatarWindowSize, false);
             }
             caption(profile.name_line1, x + menu::kCardSize * 0.5f, y + menu::kCardNameInkOffset,
                     menu::kCardNameSize, std::array<float, 4>{1.0f, 1.0f, 1.0f, 1.0f}.data(),
@@ -597,10 +596,16 @@ struct MenuPreview {
             }
             Image scene;
             if (image("graphics/Sprites/Arena/" + arena.folder + "/scene.png", &scene)) {
-                const menu::Placement place = menu::arenaScenePlacement(
+                const menu::CoverCrop crop = menu::arenaSceneCrop(
                     static_cast<float>(scene.width), static_cast<float>(scene.height));
-                canvas.blit(scene.rgba, scene.width, scene.height, x + place.x, y + place.y,
-                            place.width, place.height, false);
+                canvas.blitRegion(scene.rgba, scene.width, scene.height,
+                                  static_cast<int>(crop.u0 * scene.width + 0.5f),
+                                  static_cast<int>(crop.v0 * scene.height + 0.5f),
+                                  static_cast<int>((crop.u1 - crop.u0) * scene.width + 0.5f),
+                                  static_cast<int>((crop.v1 - crop.v0) * scene.height + 0.5f),
+                                  x + menu::kArenaSceneWindowX, y + menu::kArenaSceneWindowY,
+                                  menu::kArenaSceneWindowWidth, menu::kArenaSceneWindowHeight,
+                                  false);
             }
             caption(arena.name, x + menu::kArenaCardWidth * 0.5f, y + menu::kArenaNameInkOffset,
                     menu::kArenaNameSize, std::array<float, 4>{1.0f, 1.0f, 1.0f, 1.0f}.data(),

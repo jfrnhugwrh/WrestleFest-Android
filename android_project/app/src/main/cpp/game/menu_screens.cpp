@@ -187,21 +187,16 @@ void MenuScreens::drawMainMenu(int selected) {
         const FontMetrics &metrics = renderer_->menuFont().metrics();
         const float ink_top =
             y + menu::centreInBox(metrics, 0.0f, menu::kMainStripHeight, menu::kMainLabelSize);
-        if (menu::mainEntryLeftAligned(i)) {
-            // SHOP is printed left aligned, leaving the WWE mark beside it.
-            renderer_->drawMenuText(menu::mainEntryLabel(i), menu::kShopLabelX, ink_top,
-                                    menu::kMainLabelSize, color, menu::kLabelTracking,
-                                    menu::kLabelShadow);
-        } else {
-            drawCaption(menu::mainEntryLabel(i), menu::kCanvasWidth * 0.5f, ink_top,
-                        menu::kMainLabelSize, color, menu::kLabelTracking);
-        }
+        drawCaption(menu::mainEntryLabel(i), menu::kCanvasWidth * 0.5f, ink_top,
+                    menu::kMainLabelSize, color, menu::kLabelTracking);
     }
 
-    // The WWE mark sits to the left of the SHOP row.
+    // The WWE mark sits to the left of the centred SHOP caption.
     if (renderer_->wweLogo().valid()) {
-        batch.draw(renderer_->wweLogo(), menu::kWweLogoX, menu::kWweLogoY,
-                   renderer_->wweLogo().width * menu::kWweLogoScale,
+        const float shop_width = renderer_->measureMenuText(
+            menu::mainEntryLabel(2), menu::kMainLabelSize, menu::kLabelTracking);
+        batch.draw(renderer_->wweLogo(), menu::wweLogoX(shop_width), menu::kWweLogoY,
+                   menu::kWweLogoWidth,
                    renderer_->wweLogo().height * menu::kWweLogoScale, Color{});
     }
 
@@ -287,13 +282,14 @@ void MenuScreens::drawSuperstarPage(int page, int selected, int page_count) {
             }
             const Texture &avatar = renderer_->avatarFor(profile.folder);
             if (avatar.valid()) {
-                // The avatar is bigger than the frame's window (125 against
-                // 109), so it is fitted and centred rather than drawn at its
-                // native size over the frame's border.
-                const menu::Placement place = menu::avatarPlacement(
+                // The avatar is cropped to cover the frame's window, so the
+                // portrait fills it with no grey border or letterbox band.
+                const menu::CoverCrop crop = menu::avatarCrop(
                     static_cast<float>(avatar.width), static_cast<float>(avatar.height));
-                batch.draw(avatar, x + place.x, y + place.y, place.width, place.height,
-                           slot == selected ? Color{} : Color{0.94f, 0.94f, 0.97f, 1.0f});
+                batch.drawRegion(avatar, x + menu::kAvatarWindowX, y + menu::kAvatarWindowY,
+                                 menu::kAvatarWindowSize, menu::kAvatarWindowSize, crop.u0,
+                                 crop.v0, crop.u1, crop.v1,
+                                 slot == selected ? Color{} : Color{0.94f, 0.94f, 0.97f, 1.0f});
             }
             drawCardName(profile, x + menu::kCardSize * 0.5f, y + menu::kCardNameInkOffset);
         }
@@ -331,10 +327,14 @@ void MenuScreens::drawArenaPage(int page, int selected, int page_count) {
             }
             const Texture &scene = renderer_->arenaSceneFor(arena.folder);
             if (scene.valid()) {
-                // scene.png is 212x146 against a 190x125 window.
-                const menu::Placement place = menu::arenaScenePlacement(
+                // scene.png is 212x146 against a 190x125 window: its white rim is
+                // cut away and the rest cropped to cover the window.
+                const menu::CoverCrop crop = menu::arenaSceneCrop(
                     static_cast<float>(scene.width), static_cast<float>(scene.height));
-                batch.draw(scene, x + place.x, y + place.y, place.width, place.height, Color{});
+                batch.drawRegion(scene, x + menu::kArenaSceneWindowX,
+                                 y + menu::kArenaSceneWindowY, menu::kArenaSceneWindowWidth,
+                                 menu::kArenaSceneWindowHeight, crop.u0, crop.v0, crop.u1,
+                                 crop.v1, Color{});
             }
 
             // Long venue names wrap inside the card.

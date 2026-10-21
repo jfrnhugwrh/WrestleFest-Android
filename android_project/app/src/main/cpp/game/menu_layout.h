@@ -161,15 +161,18 @@ constexpr float kMainStripWidth = 776.0f;
 constexpr float kMainStripHeight = 49.0f;
 constexpr float kMainRowStep = 83.0f;
 constexpr float kMainLabelSize = 54.0f;  // tyCFontTT::Print(..., 0x2d, ...)
-// SHOP is the one row the original prints left aligned, to leave room for the
-// WWE mark beside it: Print(440, 328, 960, 0, "SHOP", 0x2d, ..., 0).
-constexpr float kShopLabelX = 440.0f;
-
-// The WWE mark that sits beside the SHOP row (title_menu/wwe_logo_for_shop.png
-// at 0.7, 96x107 -> 67x75).
-constexpr float kWweLogoX = 358.0f;
+// Every row, SHOP included, is centred on the canvas. The WWE mark sits to the
+// left of the SHOP caption (title_menu/wwe_logo_for_shop.png at 0.7, 96x107 ->
+// 67x75), so its x is worked out from the caption's measured width.
 constexpr float kWweLogoY = 296.0f;
 constexpr float kWweLogoScale = 0.7f;
+constexpr float kWweLogoWidth = 96.0f * kWweLogoScale;
+constexpr float kWweLogoGap = 12.0f;  // space between the mark and the caption
+
+// Left edge of the WWE mark for a caption of `label_width` centred on the canvas.
+inline float wweLogoX(float label_width) {
+    return kCanvasWidth * 0.5f - label_width * 0.5f - kWweLogoGap - kWweLogoWidth;
+}
 
 enum class MainEntry { GameModes = 0, Multiplayer, Shop, Options, Count };
 
@@ -184,9 +187,6 @@ inline const char *mainEntryLabel(int entry) {
 }
 
 inline float mainRowY(int entry) { return kMainStripY + kMainRowStep * entry; }
-
-// A row is left aligned only when it shares its line with art.
-inline bool mainEntryLeftAligned(int entry) { return entry == 2; }
 
 // MULTIPLAYER needs Xbox LIVE, which this port does not have. The reference
 // screen (the full build) draws it like any other row, so it keeps the normal
@@ -315,39 +315,71 @@ inline float arenaCardY(int row) { return 147.0f + 218.0f * row; }
 inline int arenaGridSlot(int column, int row) { return column * kArenaRows + row; }
 
 // ---------------------------------------------------------------------------
-// Fitting a card's art into the frame's window. The avatars (125x125) and the
-// arena scenes (212x146) are both bigger than their windows, so they are
-// scaled down uniformly and centred; drawing them at their native size spills
-// over the frame's border.
+// Filling a card's window with its art.
+//
+// Both pieces of art are drawn to cover the frame's window edge to edge: the
+// flat border the art ships with (the grey round a wrestler's avatar, the white
+// rim of an arena scene) is cut away first, then the rest is cropped to the
+// window's aspect ratio, centred. Nothing is letterboxed, so no empty band is
+// left inside the frame.
 // ---------------------------------------------------------------------------
-struct Placement {
-    float x = 0.0f;
-    float y = 0.0f;
-    float width = 0.0f;
-    float height = 0.0f;
+
+// Source rectangle in normalised texture coordinates.
+struct CoverCrop {
+    float u0 = 0.0f;
+    float v0 = 0.0f;
+    float u1 = 1.0f;
+    float v1 = 1.0f;
 };
 
-inline Placement fitInWindow(float window_x, float window_y, float window_w, float window_h,
-                             float art_w, float art_h) {
-    Placement placement;
-    if (art_w <= 0.0f || art_h <= 0.0f || window_w <= 0.0f || window_h <= 0.0f) return placement;
-    const float scale = std::min(window_w / art_w, window_h / art_h);
-    placement.width = art_w * scale;
-    placement.height = art_h * scale;
-    placement.x = window_x + (window_w - placement.width) * 0.5f;
-    placement.y = window_y + (window_h - placement.height) * 0.5f;
-    return placement;
+// Pixels of border removed from each side of the shipped art, measured from
+// graphics/Sprites/Character/*/avatar.png (grey, up to 14 px at the top) and
+// graphics/Sprites/Arena/*/scene.png (white, 3 px at the sides, 13-16 at the top).
+constexpr float kAvatarInsetLeft = 4.0f;
+constexpr float kAvatarInsetTop = 14.0f;
+constexpr float kAvatarInsetRight = 4.0f;
+constexpr float kAvatarInsetBottom = 0.0f;
+constexpr float kSceneInsetLeft = 3.0f;
+constexpr float kSceneInsetTop = 16.0f;
+constexpr float kSceneInsetRight = 3.0f;
+constexpr float kSceneInsetBottom = 3.0f;
+
+inline CoverCrop coverCrop(float art_w, float art_h, float inset_l, float inset_t,
+                           float inset_r, float inset_b, float window_w, float window_h) {
+    CoverCrop crop;
+    if (art_w <= 0.0f || art_h <= 0.0f || window_w <= 0.0f || window_h <= 0.0f) return crop;
+    const float region_w = art_w - inset_l - inset_r;
+    const float region_h = art_h - inset_t - inset_b;
+    if (region_w <= 0.0f || region_h <= 0.0f) return crop;
+
+    // Crop the (inset) region down to the window's aspect, keeping it centred.
+    float crop_w = region_w;
+    float crop_h = region_h;
+    const float window_aspect = window_w / window_h;
+    if (region_w / region_h > window_aspect) {
+        crop_w = region_h * window_aspect;
+    } else {
+        crop_h = region_w / window_aspect;
+    }
+    const float left = inset_l + (region_w - crop_w) * 0.5f;
+    const float top = inset_t + (region_h - crop_h) * 0.5f;
+    crop.u0 = left / art_w;
+    crop.v0 = top / art_h;
+    crop.u1 = (left + crop_w) / art_w;
+    crop.v1 = (top + crop_h) / art_h;
+    return crop;
 }
 
-// Card-local placement of the two pieces of card art.
-inline Placement avatarPlacement(float art_w, float art_h) {
-    return fitInWindow(kAvatarWindowX, kAvatarWindowY, kAvatarWindowSize, kAvatarWindowSize, art_w,
-                       art_h);
+// Card-local crop of the avatar, for the square window.
+inline CoverCrop avatarCrop(float art_w, float art_h) {
+    return coverCrop(art_w, art_h, kAvatarInsetLeft, kAvatarInsetTop, kAvatarInsetRight,
+                     kAvatarInsetBottom, kAvatarWindowSize, kAvatarWindowSize);
 }
 
-inline Placement arenaScenePlacement(float art_w, float art_h) {
-    return fitInWindow(kArenaSceneWindowX, kArenaSceneWindowY, kArenaSceneWindowWidth,
-                       kArenaSceneWindowHeight, art_w, art_h);
+// Card-local crop of the arena scene, for its window.
+inline CoverCrop arenaSceneCrop(float art_w, float art_h) {
+    return coverCrop(art_w, art_h, kSceneInsetLeft, kSceneInsetTop, kSceneInsetRight,
+                     kSceneInsetBottom, kArenaSceneWindowWidth, kArenaSceneWindowHeight);
 }
 
 // ---------------------------------------------------------------------------

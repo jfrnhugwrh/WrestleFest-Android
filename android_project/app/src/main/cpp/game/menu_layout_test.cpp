@@ -91,13 +91,13 @@ void testMainMenu() {
     // MainScene loads the strips at i * 83 + 167.
     checkNear(mainRowY(1) - mainRowY(0), 83.0f, 0.01f, "the rows step 83 px, as the original does");
     checkNear(mainRowY(3), 416.0f, 0.01f, "the OPTIONS row is at y = 416");
-    // Every row is centred on the canvas except SHOP, which leaves room for the
-    // WWE mark the original draws beside it.
-    check(mainEntryLeftAligned(2) && !mainEntryLeftAligned(0) && !mainEntryLeftAligned(3),
-          "only SHOP is printed left aligned");
-    check(kShopLabelX > 0.0f && kShopLabelX < kCanvasWidth * 0.5f,
-          "the SHOP caption starts left of centre");
-    check(kWweLogoX + 96.0f * kWweLogoScale < kShopLabelX, "the WWE mark sits left of SHOP");
+    // Every row, SHOP included, is centred on the canvas; the WWE mark sits to
+    // the left of the centred SHOP caption, clear of it.
+    const float shop_width = 110.0f;  // any caption width: the mark follows it
+    checkNear(wweLogoX(shop_width) + kWweLogoWidth + kWweLogoGap,
+              kCanvasWidth * 0.5f - shop_width * 0.5f, 0.01f,
+              "the WWE mark ends one gap left of the centred SHOP caption");
+    check(wweLogoX(shop_width) > 0.0f, "the WWE mark stays on the canvas");
     check(kMainStripX > 0.0f && kMainStripX + kMainStripWidth < kCanvasWidth,
           "the strips sit inside the canvas");
     check(mainEntryAt(480.0f, 200.0f) == 0, "the first row is the default highlight");
@@ -211,42 +211,45 @@ void testChrome() {
     }
 }
 
-// The card art has to land inside the frame's transparent window: drawing an
-// avatar or a scene at its native size spills over the frame's border, which is
-// what the earlier pass did.
+// The card art has to fill the frame's transparent window: the flat border the
+// art ships with is cut away and the rest is cropped to the window's aspect,
+// so neither a grey/white rim nor a letterbox band is left inside the frame.
 void testCardWindows() {
     std::printf("[card windows]\n");
     const float avatar = 125.0f;   // graphics/Sprites/Character/*/avatar.png
-    const menu::Placement a = avatarPlacement(avatar, avatar);
-    checkNear(a.width, kAvatarWindowSize, 0.01f, "the avatar is fitted to the window width");
-    checkNear(a.height, kAvatarWindowSize, 0.01f, "the avatar is fitted to the window height");
-    checkNear(a.x, kAvatarWindowX, 0.01f, "the square avatar is centred in its window");
-    checkNear(a.y, kAvatarWindowY, 0.01f, "the square avatar is centred in its window");
-    check(a.width <= kAvatarWindowSize + 0.01f && a.height <= kAvatarWindowSize + 0.01f,
-          "the avatar does not cover the frame");
-    check(kAvatarWindowX + kAvatarWindowSize < kCardSize,
-          "the frame keeps a border on the right of the window");
-    check(kAvatarWindowY + kAvatarWindowSize < kCardSize,
-          "the frame keeps a border under the window");
+    const CoverCrop a = avatarCrop(avatar, avatar);
+    checkNear((a.u1 - a.u0) * avatar / ((a.v1 - a.v0) * avatar), 1.0f, 0.001f,
+              "the avatar crop keeps the square window's aspect");
+    check(a.u0 * avatar >= kAvatarInsetLeft - 0.01f && a.v0 * avatar >= kAvatarInsetTop - 0.01f,
+          "the avatar crop starts inside the grey border");
+    check(a.u0 >= 0.0f && a.u1 <= 1.0f && a.v0 >= 0.0f && a.v1 <= 1.0f && a.u1 > a.u0 &&
+              a.v1 > a.v0,
+          "the avatar crop stays inside the texture");
 
     const float scene_w = 212.0f;  // graphics/Sprites/Arena/*/scene.png
     const float scene_h = 146.0f;
-    const menu::Placement s = arenaScenePlacement(scene_w, scene_h);
-    check(s.width <= kArenaSceneWindowWidth + 0.01f && s.height <= kArenaSceneWindowHeight + 0.01f,
-          "the arena scene stays inside the window");
-    checkNear(s.width / s.height, scene_w / scene_h, 0.001f, "the scene keeps its aspect ratio");
-    checkNear(s.x + s.width * 0.5f, kArenaSceneWindowX + kArenaSceneWindowWidth * 0.5f, 0.01f,
-              "the scene is centred horizontally");
-    checkNear(s.y + s.height * 0.5f, kArenaSceneWindowY + kArenaSceneWindowHeight * 0.5f, 0.01f,
-              "the scene is centred vertically");
+    const CoverCrop s = arenaSceneCrop(scene_w, scene_h);
+    checkNear((s.u1 - s.u0) * scene_w / ((s.v1 - s.v0) * scene_h),
+              kArenaSceneWindowWidth / kArenaSceneWindowHeight, 0.001f,
+              "the scene crop keeps the window's aspect");
+    check(s.u0 * scene_w >= kSceneInsetLeft - 0.01f && s.v0 * scene_h >= kSceneInsetTop - 0.01f,
+          "the scene crop starts inside the white rim");
+    check(s.u1 * scene_w <= scene_w - kSceneInsetRight + 0.01f &&
+              s.v1 * scene_h <= scene_h - kSceneInsetBottom + 0.01f,
+          "the scene crop ends inside the white rim");
     check(kArenaSceneWindowX + kArenaSceneWindowWidth < kArenaCardWidth,
           "the frame keeps a border on the right of the window");
     check(kArenaSceneWindowY + kArenaSceneWindowHeight < kArenaCardHeight,
           "the frame keeps a border under the window");
+    check(kAvatarWindowX + kAvatarWindowSize < kCardSize,
+          "the frame keeps a border on the right of the avatar window");
+    check(kAvatarWindowY + kAvatarWindowSize < kCardSize,
+          "the frame keeps a border under the avatar window");
 
-    // Degenerate art sizes must not produce off-screen quads.
-    const menu::Placement empty = avatarPlacement(0.0f, 0.0f);
-    check(empty.width == 0.0f && empty.height == 0.0f, "missing art produces an empty placement");
+    // Degenerate art sizes fall back to the whole texture rather than NaNs.
+    const CoverCrop empty = avatarCrop(0.0f, 0.0f);
+    check(empty.u0 == 0.0f && empty.u1 == 1.0f && empty.v0 == 0.0f && empty.v1 == 1.0f,
+          "missing art falls back to the whole texture");
 }
 
 }  // namespace
