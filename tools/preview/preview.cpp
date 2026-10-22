@@ -11,7 +11,7 @@
 #include "../../android_project/app/src/main/cpp/data/asset_source.h"
 #include "../../android_project/app/src/main/cpp/render/image.h"
 #include "../../android_project/app/src/main/cpp/render/zip_reader.h"
-#include "../../android_project/app/src/main/cpp/sim/collision.h"
+#include "../../android_project/app/src/main/cpp/sim/match.h"
 #include "../../android_project/app/src/main/cpp/game/menu_layout.h"
 
 #include <algorithm>
@@ -629,7 +629,7 @@ void expandSst(const SstSprite &sprite, std::vector<std::uint8_t> *rgba) {
     }
 }
 
-struct Actor {
+struct PreviewActor {
     const WrestlerProfile *profile = nullptr;
     std::string frame;
     float x = 0.0f;
@@ -647,6 +647,7 @@ int main(int argc, char **argv) {
     // arena0.png is 1482x678-679, so the shared calibration holds.
     std::string arena_folder = "ARENA02";
     std::string screen;
+    std::string scene;
     int menu_page = 0;
     int menu_selected = 0;
     std::vector<std::string> wrestler_folders;
@@ -656,6 +657,8 @@ int main(int argc, char **argv) {
             arena_folder = arg.substr(8);
         } else if (arg.rfind("--screen=", 0) == 0) {
             screen = arg.substr(9);
+        } else if (arg.rfind("--scene=", 0) == 0) {
+            scene = arg.substr(8);
         } else if (arg.rfind("--page=", 0) == 0) {
             menu_page = std::atoi(arg.substr(7).c_str());
         } else if (arg.rfind("--selected=", 0) == 0) {
@@ -744,86 +747,220 @@ int main(int argc, char **argv) {
     }
 
     const RingGeometry ring;
-    std::vector<Actor> actors;
-    const int extra = static_cast<int>(wrestler_folders.size());
-    for (int i = 0; i < 2; ++i) {
-        Actor actor;
-        actor.profile = data.wrestlerByFolder(i < extra ? wrestler_folders[static_cast<std::size_t>(i)]
-                                                        : (i == 0 ? "00_John Cena"
-                                                                  : "03_BigShow"));
-        if (actor.profile == nullptr) continue;
-        actor.frame = "idle.sst";
-        actor.x = ring.centerX() + (i == 0 ? -110.0f : 110.0f);
-        actor.z = ring.centerZ() + 20.0f;
-        actor.facing = i == 0 ? 1.0f : -1.0f;
-        actors.push_back(actor);
+    Match sim_match;
+    const bool use_sim_scene = !scene.empty();
+    if (use_sim_scene) {
+        sim_match.configure(&data, ring, 0, 0x5150u);
+        const std::string f0 = wrestler_folders.size() > 0 ? wrestler_folders[0] : "00_John Cena";
+        const std::string f1 = wrestler_folders.size() > 1 ? wrestler_folders[1] : "03_BigShow";
+        sim_match.addWrestler(data.wrestlerByFolder(f0), 0, ring.centerX() - 95.0f,
+                              ring.centerZ() + 14.0f, 1.0f);
+        sim_match.addWrestler(data.wrestlerByFolder(f1), 1, ring.centerX() + 95.0f,
+                              ring.centerZ() + 14.0f, -1.0f);
+        sim_match.setAiControlled(0, false);
+        sim_match.setAiControlled(1, false);
+        std::vector<InputFrame> inputs(2);
+
+        if (scene == "entrance") {
+            sim_match.allowAutoStart(false);
+            sim_match.playEntrance();
+            sim_match.setAnnouncerCue(AnnouncerCue::AnnounceLeft);
+            for (int step = 0; step < 30; ++step) sim_match.update(1.0f / 60.0f, inputs);
+        } else if (scene == "close_combat") {
+            sim_match.start();
+            for (int step = 0; step < 24; ++step) {
+                inputs[0] = InputFrame{};
+                inputs[1] = InputFrame{};
+                inputs[0].right = true;
+                inputs[1].left = true;
+                sim_match.update(1.0f / 60.0f, inputs);
+            }
+            inputs[0] = InputFrame{};
+            inputs[0].btn0 = true;
+            inputs[0].btn0_edge = true;
+            for (int step = 0; step < 5; ++step) {
+                sim_match.update(1.0f / 60.0f, inputs);
+                inputs[0].btn0_edge = false;
+            }
+        } else if (scene == "grapple") {
+            sim_match.start();
+            for (int step = 0; step < 20; ++step) {
+                inputs[0] = InputFrame{};
+                inputs[1] = InputFrame{};
+                inputs[0].right = true;
+                inputs[1].left = true;
+                sim_match.update(1.0f / 60.0f, inputs);
+            }
+            inputs[0] = InputFrame{};
+            inputs[0].right = true;
+            inputs[0].btn0 = true;
+            inputs[0].btn0_edge = true;
+            for (int step = 0; step < 12; ++step) {
+                sim_match.update(1.0f / 60.0f, inputs);
+                inputs[0].btn0_edge = false;
+            }
+        } else if (scene == "pin_slap") {
+            sim_match.start();
+            Wrestler *a = sim_match.wrestler(0);
+            Wrestler *b = sim_match.wrestler(1);
+            a->x = ring.centerX() - 48.0f;
+            b->x = ring.centerX() + 12.0f;
+            b->energy = 10.0f;
+            b->energy_display = 10.0f;
+            b->changeState(state::ONGROUND, 0, sim_match);
+            inputs[0].btn1 = true;
+            inputs[0].btn1_edge = true;
+            sim_match.update(1.0f / 60.0f, inputs);
+            inputs[0] = InputFrame{};
+            for (int step = 0; step < 180; ++step) {
+                sim_match.update(1.0f / 60.0f, inputs);
+                if (sim_match.referee().count() == 2 && sim_match.referee().spriteId() == 6) {
+                    break;
+                }
+            }
+        }
     }
 
-    // Same order as GameRenderer::drawMatch: depth sort, then draw.
-    std::sort(actors.begin(), actors.end(),
-              [](const Actor &a, const Actor &b) { return a.z < b.z; });
+    Image shadow_img;
+    bytes.clear();
+    const bool have_shadow =
+        readFile(assets + "/graphics/Sprites/Arena/" + arena_folder + "/shadow.png", &bytes) &&
+        decodePng(bytes.data(), bytes.size(), &shadow_img);
 
-    for (const Actor &actor : actors) {
-        const int sst_id = actor.profile->sprite_index.count(actor.frame)
-                               ? actor.profile->sprite_index.at(actor.frame)
-                               : -1;
-        const SpriteEntry *sprite = actor.profile->spriteFor(sst_id);
-        if (sprite == nullptr) continue;
+    SmlDocument refdoc;
+    std::vector<std::uint8_t> refbytes;
+    const bool have_refdoc =
+        readFile(assets + "/graphics/Sprites/Character/Ref/refData.sml", &refbytes) &&
+        refdoc.parse(reinterpret_cast<const char *>(refbytes.data()), refbytes.size(), &error);
+
+    SmlDocument anndoc;
+    std::vector<std::uint8_t> annbytes;
+    const bool have_anndoc =
+        readFile(assets + "/graphics/Sprites/Character/Announcer/Robert/announcerData.sml",
+                 &annbytes) &&
+        anndoc.parse(reinterpret_cast<const char *>(annbytes.data()), annbytes.size(), &error);
+
+    auto drawWrestlerFrame = [&](const WrestlerProfile *profile, int sst_id, float wx, float wz,
+                                 float wfacing) {
+        if (profile == nullptr) return;
+        const SpriteEntry *sprite = profile->spriteFor(sst_id);
+        if (sprite == nullptr) return;
         std::vector<std::uint8_t> zip_bytes;
         ZipArchive archive;
         std::vector<std::uint8_t> sst_bytes;
         SstSprite decoded;
         std::vector<std::uint8_t> rgba;
         const std::string path =
-            assets + "/asset_bundles/Sprites/Character/" + actor.profile->folder + "/wrestler.zip";
+            assets + "/asset_bundles/Sprites/Character/" + profile->folder + "/wrestler.zip";
         if (!readFile(path, &zip_bytes) || !archive.open(zip_bytes.data(), zip_bytes.size()) ||
             !archive.read(sprite->name, &sst_bytes) ||
             !decodeSst(sst_bytes.data(), sst_bytes.size(), &decoded)) {
-            std::printf("frame %s missing for %s\n", sprite->name.c_str(),
-                        actor.profile->folder.c_str());
-            continue;
+            return;
         }
         expandSst(decoded, &rgba);
+        if (have_shadow) {
+            const float sw = 96.0f * kArtScale;
+            const float sh = 26.0f * kArtScale;
+            canvas.blit(shadow_img.rgba, shadow_img.width, shadow_img.height, wx - sw * 0.5f,
+                        wz - sh * 0.62f, sw, sh, false, 0.55f);
+        }
         const float width = decoded.width * kArtScale;
         const float height = decoded.height * kArtScale;
-        const float ground = actor.z;
-        const float left = actor.facing >= 0.0f
-                               ? actor.x - sprite->x_offset * kArtScale
-                               : actor.x - (decoded.width - sprite->x_offset) * kArtScale;
-        const float top = ground - sprite->y_offset * kArtScale;
-        canvas.blit(rgba, decoded.width, decoded.height, left, top, width, height,
-                    actor.facing < 0.0f);
-        std::printf("%s %s: %.0fx%.0f at %.1f,%.1f (offset %.1f,%.1f)\n",
-                    actor.profile->name.c_str(), sprite->name.c_str(), width, height, left, top,
-                    sprite->x_offset, sprite->y_offset);
-    }
+        const float left = wfacing >= 0.0f
+                               ? wx - sprite->x_offset * kArtScale
+                               : wx - (decoded.width - sprite->x_offset) * kArtScale;
+        const float top = wz - sprite->y_offset * kArtScale;
+        canvas.blit(rgba, decoded.width, decoded.height, left, top, width, height, wfacing < 0.0f);
+    };
 
-    // ---- Referee ---------------------------------------------------------
-    {
-        SmlDocument refdoc;
-        std::vector<std::uint8_t> refbytes;
-        if (readFile(assets + "/graphics/Sprites/Character/Ref/refData.sml", &refbytes) &&
-            refdoc.parse(reinterpret_cast<const char *>(refbytes.data()), refbytes.size(), &error)) {
-            const int row = 10;  // mike_1, the standing walk pose
-            if (row < static_cast<int>(refdoc.records.size())) {
-                const SmlRecord &record = refdoc.records[static_cast<std::size_t>(row)];
-                std::vector<std::uint8_t> png;
-                Image ref_image;
-                const std::string name = record.string("name");
-                if (readFile(assets + "/graphics/Sprites/Character/Ref/" + name, &png) &&
-                    decodePng(png.data(), png.size(), &ref_image)) {
-                    const float xoff = static_cast<float>(record.number("xoffset"));
-                    const float yoff = static_cast<float>(record.number("yoffset"));
-                    const float ref_x = ring.centerX() + 40.0f;
-                    const float ref_z = 470.0f;
-                    const float w = ref_image.width * kArtScale;
-                    const float h = ref_image.height * kArtScale;
-                    canvas.blit(ref_image.rgba, ref_image.width, ref_image.height,
-                                ref_x - xoff * kArtScale, ref_z - yoff * kArtScale, w, h, false);
-                    std::printf("referee %s: %.0fx%.0f at %.1f,%.1f\n", name.c_str(), w, h,
-                                ref_x - xoff * kArtScale, ref_z - yoff * kArtScale);
-                }
+    auto drawOfficialFrame = [&](const SmlDocument &doc, const std::string &dir, int row, float ox,
+                                 float oz, float ofacing, float alpha) {
+        if (row < 0 || row >= static_cast<int>(doc.records.size())) return;
+        const SmlRecord &record = doc.records[static_cast<std::size_t>(row)];
+        std::vector<std::uint8_t> png;
+        Image img;
+        const std::string name = record.string("name");
+        if (!readFile(dir + name, &png) || !decodePng(png.data(), png.size(), &img)) return;
+        if (have_shadow) {
+            const float sw = 92.0f * kArtScale;
+            const float sh = 25.0f * kArtScale;
+            canvas.blit(shadow_img.rgba, shadow_img.width, shadow_img.height, ox - sw * 0.5f,
+                        oz - sh * 0.62f, sw, sh, false, 0.5f * alpha);
+        }
+        const float xoff = static_cast<float>(record.number("xoffset"));
+        const float yoff = static_cast<float>(record.number("yoffset"));
+        const float w = img.width * kArtScale;
+        const float h = img.height * kArtScale;
+        const float left = ofacing >= 0.0f ? ox - xoff * kArtScale
+                                           : ox - (img.width - xoff) * kArtScale;
+        canvas.blit(img.rgba, img.width, img.height, left, oz - yoff * kArtScale, w, h,
+                    ofacing < 0.0f, alpha);
+    };
+
+    if (use_sim_scene) {
+        enum class Kind { Wrestler, Ref, Announcer };
+        struct Item {
+            float z;
+            int prio;
+            Kind kind;
+            int idx;
+        };
+        std::vector<Item> items;
+        for (int i = 0; i < sim_match.wrestlerCount(); ++i) {
+            const Wrestler *w = sim_match.wrestler(i);
+            items.push_back({w->z, w->isDown() ? -2 : 0, Kind::Wrestler, i});
+        }
+        items.push_back({sim_match.referee().z, 1, Kind::Ref, 0});
+        if (sim_match.announcer().visible()) {
+            items.push_back({sim_match.announcer().z, 0, Kind::Announcer, 0});
+        }
+        std::stable_sort(items.begin(), items.end(), [](const Item &a, const Item &b) {
+            if (a.z != b.z) return a.z < b.z;
+            return a.prio < b.prio;
+        });
+        for (const Item &item : items) {
+            if (item.kind == Kind::Wrestler) {
+                const Wrestler *w = sim_match.wrestler(item.idx);
+                drawWrestlerFrame(w->profile(), w->spriteId(), w->x, w->z - w->y, w->facing);
+            } else if (item.kind == Kind::Ref && have_refdoc) {
+                const Referee &ref = sim_match.referee();
+                drawOfficialFrame(refdoc, assets + "/graphics/Sprites/Character/Ref/",
+                                  ref.spriteId(), ref.x, ref.z - ref.y, ref.facing, 1.0f);
+            } else if (item.kind == Kind::Announcer && have_anndoc) {
+                const RingAnnouncer &ann = sim_match.announcer();
+                drawOfficialFrame(anndoc,
+                                  assets + "/graphics/Sprites/Character/Announcer/Robert/",
+                                  ann.spriteId(), ann.x, ann.z - ann.y, ann.facing, ann.alpha());
             }
+        }
+    } else {
+        std::vector<PreviewActor> actors;
+        const int extra = static_cast<int>(wrestler_folders.size());
+        for (int i = 0; i < 2; ++i) {
+            PreviewActor actor;
+            actor.profile =
+                data.wrestlerByFolder(i < extra ? wrestler_folders[static_cast<std::size_t>(i)]
+                                                : (i == 0 ? "00_John Cena" : "03_BigShow"));
+            if (actor.profile == nullptr) continue;
+            actor.frame = "idle.sst";
+            actor.x = ring.centerX() + (i == 0 ? -110.0f : 110.0f);
+            actor.z = ring.centerZ() + 20.0f;
+            actor.facing = i == 0 ? 1.0f : -1.0f;
+            actors.push_back(actor);
+        }
+
+        std::sort(actors.begin(), actors.end(),
+                  [](const PreviewActor &a, const PreviewActor &b) { return a.z < b.z; });
+        if (have_refdoc) {
+            // Row 0 is mike_1.png (standing watch pose), sorted behind z=484 actors.
+            drawOfficialFrame(refdoc, assets + "/graphics/Sprites/Character/Ref/", 0,
+                              ring.centerX() + 40.0f, 412.0f, -1.0f, 1.0f);
+        }
+        for (const PreviewActor &actor : actors) {
+            const int sst_id = actor.profile->sprite_index.count(actor.frame)
+                                   ? actor.profile->sprite_index.at(actor.frame)
+                                   : -1;
+            drawWrestlerFrame(actor.profile, sst_id, actor.x, actor.z, actor.facing);
         }
     }
 
@@ -860,27 +997,45 @@ int main(int argc, char **argv) {
         const float x = left ? 6.0f : 960.0f - 6.0f - bar_w;
         blitPng("ui/Sprites/UI/energy_bar/UI_energy01_background.png", x, 4.0f, bar_w, bar_h,
                 !left, 1.0f);
-        // 70 % energy for the player, 45 % for the CPU.
-        const float value = left ? 0.7f : 0.45f;
+        float value = left ? 0.7f : 0.45f;
+        if (use_sim_scene && sim_match.wrestler(i) != nullptr) {
+            const Wrestler *w = sim_match.wrestler(i);
+            value = std::clamp(w->energy / std::max(1.0f, w->energy_max), 0.0f, 1.0f);
+        }
         const float inner_x = 76.0f * bar_scale;
         const float inner_y = 32.0f * bar_scale;
         const float inner_w = 718.0f * bar_scale;
         const float inner_h = 19.0f * bar_scale;
         const float left_x = left ? x + inner_x : x + inner_x + inner_w * (1.0f - value);
-        blitPng("ui/Sprites/UI/energy_bar/UI_energy01_1.png", left_x, 4.0f + inner_y,
+        const char *fill_path = value <= 0.3f ? "ui/Sprites/UI/energy_bar/UI_energy01_2.png"
+                                              : "ui/Sprites/UI/energy_bar/UI_energy01_1.png";
+        blitPng(fill_path, left_x, 4.0f + inner_y,
                 inner_w * value, inner_h, !left, 1.0f);
         blitPng(left ? "ui/Sprites/UI/energy_bar/UI_1P.png"
                      : "ui/Sprites/UI/energy_bar/UI_2P.png",
                 left ? x + 18.0f * bar_scale : x + bar_w - 18.0f * bar_scale - 31.0f, 4.0f + 33.0f * bar_scale,
                 29.0f, 16.0f, false, 1.0f);
     }
-    // Timer: 0:59 -> TIME_0 TIME_middle TIME_5 TIME_9.
+    // Timer: live remaining clock for simulated scenes, 0:59 for static mock.
     {
+        int remain_sec = 59;
+        if (use_sim_scene) {
+            const float limit = sim_match.rule().max_match_time > 0.0f
+                                    ? sim_match.rule().max_match_time
+                                    : 360.0f;
+            remain_sec = std::max(0, static_cast<int>(std::ceil(limit - sim_match.clock())));
+        }
+        const int mins = std::clamp(remain_sec / 60, 0, 9);
+        const int tens = std::clamp((remain_sec % 60) / 10, 0, 9);
+        const int ones = std::clamp(remain_sec % 10, 0, 9);
+        const std::string d0 = "TIME_" + std::to_string(mins);
+        const std::string d1 = "TIME_" + std::to_string(tens);
+        const std::string d2 = "TIME_" + std::to_string(ones);
         const float digit_w = 23.0f;
         const float gap = 1.0f;
         const float total_w = digit_w * 4 + gap * 3 + 12.0f;
         float x = 480.0f - total_w * 0.5f;
-        const char *names[4] = {"TIME_0", "TIME_middle_mark", "TIME_5", "TIME_9"};
+        const char *names[4] = {d0.c_str(), "TIME_middle_mark", d1.c_str(), d2.c_str()};
         for (int i = 0; i < 4; ++i) {
             const bool mark = std::strcmp(names[i], "TIME_middle_mark") == 0;
             blitPng(std::string("ui/Sprites/UI/count/") + names[i] + ".png", x, mark ? 16.0f : 8.0f,
@@ -897,6 +1052,17 @@ int main(int argc, char **argv) {
             104.0f, 104.0f, false, 0.6f);
     blitPng("graphics/Sprites/virtual_pad/red_btn_base.png", 735.0f - 62.0f, 340.0f - 62.0f, 124.0f,
             124.0f, false, 0.6f);
+
+    if (use_sim_scene && sim_match.referee().showingPinCount()) {
+        const int value = sim_match.referee().count();
+        if (value >= 1 && value <= 9) {
+            const float scale = 2.4f * sim_match.referee().countPopScale();
+            const float w = 23.0f * scale;
+            const float h = 43.0f * scale;
+            blitPng("ui/Sprites/UI/count/TIME_" + std::to_string(value) + ".png",
+                    480.0f - w * 0.5f, 241.5f - h * 0.5f, w, h, false, 1.0f);
+        }
+    }
 
     if (!writePng(out, canvas.rgba)) {
         std::printf("cannot write %s\n", out.c_str());

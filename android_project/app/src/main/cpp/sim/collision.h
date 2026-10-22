@@ -1,7 +1,7 @@
 #ifndef WRESTLEFEST_SIM_COLLISION_H
 #define WRESTLEFEST_SIM_COLLISION_H
 
-// Ring geometry + the 1-D collision model of the original.
+// Ring geometry + collision layers + close-quarters combat geometry.
 //
 // Coordinates are the original's: x horizontal, y height (jumps), z depth.
 // In screen space z is the vertical position on the floor (larger z = closer to
@@ -9,7 +9,22 @@
 // (CActor::GetRingLeftX / GetRingRightX). All distances are in logical 960x640
 // units - the same space the SML tables are authored in.
 
+#include "tuning.h"
+
 namespace wrestlefest {
+
+// Explicit collision layers so solid hurtboxes never drop out during standing
+// strikes or hit reactions, while paired throws/pins and airborne dives run
+// unblocked on their own contact planes.
+enum class CollisionLayer : int {
+    NonInteractive = 0,  // KO'd, waiting entrant, apron partner, intro/victory
+    StandingSolid = 1,   // locomotion, standing strikes, standing hit-reacts
+    Paired = 2,          // grapples, headlocks, throws, submissions, pin holds
+    Grounded = 3,        // flat on the mat (stomp/pin target, passable by feet)
+    Airborne = 4,        // springboard / turnbuckle / fall-away flight
+};
+
+CollisionLayer stateCollisionLayer(int sub_state);
 
 struct RingGeometry {
     float top_z = 368.0f;              // far edge (RingTopZ)
@@ -33,7 +48,7 @@ struct RingGeometry {
 
 // Distance along x between two actors.
 float distanceX(float ax, float bx);
-// |dz| < CollisionRangeZ(depth gate).
+// |dz| <= CollisionRangeZ (depth gate).
 bool depthOverlap(float az, float bz, float range_z);
 
 // The original's per-state collision: the attacker's CollisionRangeX defines a
@@ -42,6 +57,19 @@ bool depthOverlap(float az, float bz, float range_z);
 // `param_2 != 0` branch of CWrestler::Collision).
 bool canReach(float ax, float az, float facing, float bx, float bz, float range_x, float range_z,
               bool facing_only);
+
+// Close-quarters hurtbox check for standing strikes: preserves directional hit
+// detection while tolerating `close_overlap` when two solid hurtboxes are in
+// chest-to-chest contact so point-blank punches/kicks never whiff through a body.
+bool canStrikeConnect(float ax, float az, float facing, float bx, float bz, float range_x,
+                      float range_z, float close_overlap = tuning::kCloseStrikeOverlap);
+
+// Resolves horizontal overlap between two solid standing actors within the ring
+// trapezoid. Applies mobility weights (`weight_a`, `weight_b`) and transfers any
+// rope-clamped remainder onto the unpinned actor so corner exchanges never clip.
+void separateSolidPair(const RingGeometry &ring, bool clamp_a, bool clamp_b, float min_gap,
+                       float weight_a, float weight_b, float fallback_dir, float &ax, float az,
+                       float &bx, float bz);
 
 // IsActor1_Face_Acto2: (bx - ax) * facing >= 0.
 bool isFacing(float ax, float facing, float bx);

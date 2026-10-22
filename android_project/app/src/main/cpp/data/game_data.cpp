@@ -62,9 +62,32 @@ int moveFamilyEntryState(int type_id) {
         case 9: return state::PUNCH;
         case 10: return state::KICK;
         case 11: return state::USE_TA_WS;    // tag attack
-        case 12: return state::USE_RAM_WS;   // TODO(verify): spear family
+        case 12: return state::USE_RFWS;     // RushForceWSTable: Spear, Trouble in Paradise, La Mistica
         case 13: return state::USE_WEAPON;
         default: return state::IDLE;
+    }
+}
+
+void parseAnimRecords(const SmlDocument &doc, std::vector<AnimInfo> *out) {
+    out->clear();
+    out->reserve(doc.records.size());
+    for (const SmlRecord &record : doc.records) {
+        AnimInfo info;
+        info.id = record.integer("ID");
+        info.name = record.string("AnimName");
+        info.frame_count = record.integer("FrameCount", 1);
+        for (int i = 0; i < 24; ++i) {
+            info.frames[static_cast<std::size_t>(i)] =
+                static_cast<int>(record.numberAt("FrameArray", i, -1.0));
+        }
+        info.x_offset = static_cast<float>(record.number("xOffset", 0.0));
+        info.opposing_anim = record.integer("OpposingAnim", -1);
+        info.facing = static_cast<float>(record.number("Facing", 1.0));
+        info.opposing_facing = static_cast<float>(record.number("OpposingFacing", -1.0));
+        info.bottom_layer = record.integer("BottomLayerPrority", 0);
+        info.upper_layer = record.integer("UpperLayerPrority", 0);
+        info.hurt_timing = static_cast<float>(record.number("HurtTimming", -1.0));
+        out->push_back(std::move(info));
     }
 }
 
@@ -106,26 +129,16 @@ bool GameData::loadCommonTables(AssetSource *source, const std::string &root, st
 
     // AnimationTable/WrestlerAT.sml -> 269 animations.
     if (loadOne(source, root + "/AnimationTable/WrestlerAT.sml", &doc, error)) {
-        anims_.clear();
-        anims_.reserve(doc.records.size());
-        for (const SmlRecord &record : doc.records) {
-            AnimInfo info;
-            info.id = record.integer("ID");
-            info.name = record.string("AnimName");
-            info.frame_count = record.integer("FrameCount", 1);
-            for (int i = 0; i < 24; ++i) {
-                info.frames[static_cast<std::size_t>(i)] =
-                    static_cast<int>(record.numberAt("FrameArray", i, -1.0));
-            }
-            info.x_offset = static_cast<float>(record.number("xOffset", 0.0));
-            info.opposing_anim = record.integer("OpposingAnim", -1);
-            info.facing = static_cast<float>(record.number("Facing", 1.0));
-            info.opposing_facing = static_cast<float>(record.number("OpposingFacing", -1.0));
-            info.bottom_layer = record.integer("BottomLayerPrority", 0);
-            info.upper_layer = record.integer("UpperLayerPrority", 0);
-            info.hurt_timing = static_cast<float>(record.number("HurtTimming", -1.0));
-            anims_.push_back(std::move(info));
-        }
+        parseAnimRecords(doc, &anims_);
+    }
+
+    // RefereeAT.sml (6 animations) and AnnouncerAT.sml (12 animations).
+    std::string optional_error;
+    if (loadOne(source, root + "/AnimationTable/RefereeAT.sml", &doc, &optional_error)) {
+        parseAnimRecords(doc, &referee_anims_);
+    }
+    if (loadOne(source, root + "/AnimationTable/AnnouncerAT.sml", &doc, &optional_error)) {
+        parseAnimRecords(doc, &announcer_anims_);
     }
 
     // WrestleStyleList.sml -> 95 moves, with TypeID resolved to an entry state.
@@ -664,6 +677,8 @@ bool GameData::load(AssetSource *source, const std::string &data_root, std::stri
 
 const StateInfo *GameData::stateInfo(int id) const { return findById(states_, id); }
 const AnimInfo *GameData::animInfo(int id) const { return findById(anims_, id); }
+const AnimInfo *GameData::refereeAnimInfo(int id) const { return findById(referee_anims_, id); }
+const AnimInfo *GameData::announcerAnimInfo(int id) const { return findById(announcer_anims_, id); }
 const MoveInfo *GameData::moveInfo(int id) const { return findById(moves_, id); }
 const ForceMove *GameData::forceMove(int id) const { return findById(force_moves_, id); }
 const RamMove *GameData::ramMove(int id) const { return findById(ram_moves_, id); }
@@ -694,7 +709,8 @@ const WrestlerProfile *GameData::wrestlerByFolder(const std::string &folder) con
     return nullptr;
 }
 
-int GameData::buttonCountGoal(int state_id, float energy, int pin_attempts) const {
+int GameData::buttonCountGoal(int state_id, float energy, int pin_attempts,
+                              int ws_table_id) const {
     // Energy bands, GetButtonCountGoal: >95, 95-90, 90-80, ... 10-5, <5.
     int band = 11;
     if (energy > 95.0f) {
@@ -721,15 +737,21 @@ int GameData::buttonCountGoal(int state_id, float energy, int pin_attempts) cons
         band = 10;
     }
 
+    const ButtonCountRow *fallback_row = nullptr;
     for (const ButtonCountRow &row : button_counts_) {
         if (row.state_table_id != state_id) continue;
-        int goal = row.goals[static_cast<std::size_t>(band)];
-        if (state_id == state::BE_PINNED && pin_attempts > 0) {
-            goal += static_cast<int>(common_.add_counter_per_no_energy_pin * pin_attempts);
+        if (ws_table_id >= 0 && row.ws_table_id == ws_table_id) {
+            fallback_row = &row;
+            break;
         }
-        return goal;
+        if (fallback_row == nullptr) fallback_row = &row;
     }
-    return 0;
+    if (fallback_row == nullptr) return 0;
+    int goal = fallback_row->goals[static_cast<std::size_t>(band)];
+    if (state_id == state::BE_PINNED && pin_attempts > 0) {
+        goal += static_cast<int>(common_.add_counter_per_no_energy_pin * pin_attempts);
+    }
+    return goal;
 }
 
 }  // namespace wrestlefest

@@ -5,8 +5,9 @@
 // GAMEPLAY_IMPLEMENTATION 1.1:
 //
 //   for each wrestler: tick(state, animation, meters)
+//   solid collision pass (pre-resolution + post-resolution)
 //   then the AI writes the next InputFrame
-//   then the referee / counts
+//   then the referee / announcer / counts
 //   then the win check
 //
 // Match is the only entry point: update(dt, inputs) - inputs has one entry per
@@ -45,35 +46,26 @@ public:
     // Entrance staging: puts every wrestler into ENTRANCE (105). The flow layer
     // holds the match in MatchPhase::Intro until it calls start().
     void playEntrance();
+    void setAnnouncerCue(AnnouncerCue cue) { announcer_.setCue(cue); }
 
     // Royal Rumble entrant timing: the first `initial_entrants` start in the
-    // ring and the rest walk in from the aisle one every `interval` seconds,
-    // which is how the original's Rumble keeps the ring at two to four bodies.
-    // Call before start(); ignored outside the Rumble rule.
+    // ring and the rest walk in from the aisle one every `interval` seconds.
     void enableStaggeredEntry(float interval, int initial_entrants);
     bool staggeredEntry() const { return entry_interval_ > 0.0f; }
     int waitingEntrants() const { return static_cast<int>(pending_entrants_.size()); }
-    // Seconds until the next entrant walks in (0 when nobody is waiting).
     float nextEntryIn() const;
 
-    // 2 VS 2 tag rules: one wrestler of each team starts in the ring, the team
-    // mate waits on the apron and takes over when the active man tags the
-    // corner (blue button next to the partner). Enable before start().
+    // 2 VS 2 tag rules.
     void enableTagTeams(bool enabled = true) { tag_mode_ = enabled; }
     bool tagEnabled() const { return tag_mode_; }
     bool isOnApron(int index) const {
         return index >= 0 && index < static_cast<int>(apron_.size()) &&
                apron_[static_cast<std::size_t>(index)];
     }
-    // Team mate of `index` (-1 when there is none / not a tag match).
     int partnerIndex(int index) const;
-    // Where the apron wrestler of a team stands.
     float apronX(int team) const;
     float apronZ() const { return ring_.centerZ(); }
 
-    // When true (default) Match rings the bell itself after a short intro beat.
-    // The screen flow disables it and calls start() when its own entrance and
-    // announcer beats are done.
     void allowAutoStart(bool allow) { auto_start_ = allow; }
 
     // One fixed step. `inputs` is indexed like wrestlers(); missing entries are
@@ -99,7 +91,6 @@ public:
 
     MatchPhase phase() const { return phase_; }
     int winnerTeam() const { return winner_team_; }
-    // Index of the wrestler on the winning side (-1 before the result).
     int winnerIndex() const;
     int loserTeam() const { return loser_team_; }
     float timeLeft() const;
@@ -107,41 +98,26 @@ public:
     bool isTag() const { return rule_ != nullptr && rule_->id == 1; }
 
     const Referee &referee() const { return referee_; }
+    const RingAnnouncer &announcer() const { return announcer_; }
     int outsideCount() const { return outside_count_; }
-    // True when the referee is walking to / counting the pin of this wrestler
-    // (HandleBePinned's gate for starting the mash counter).
     bool refereePinTarget(int wrestler) const { return referee_.watchingPinFor(wrestler); }
 
     // Ends the match immediately (used by tests and by the flow layer).
     void finish(int winner_team);
 
-    // Makes a wrestler AI-driven (index 0 is human by default). Tests use this
-    // to run AI vs AI.
     void setAiControlled(int index, bool controlled);
     int aiDebug(int index) const { return index >= 0 && index < (int)ai_.size() ? (int)ai_[index].state : -1; }
 
 private:
-    void updateReferee(float dt);
     void checkWinConditions(float dt);
     void updateGrappleBeats(float dt);
-    void updateDogfights();
-    void updateRegions();
     void resolveCollisions();
-    // Keeps two standing wrestlers from stacking into the same sprite.
     void resolveBodySeparation();
-    // CWrestler::GetOpponent: every wrestler points at its nearest live enemy.
-    // Paired moves keep the opponent they started with.
+    void updateRegions();
     void updateOpponents();
     void updateRumbleEntries(float dt);
-    // A wrestler who is out of energy is out of the match - but only in rules
-    // without pins. In pin rules an empty bar means "pinnable", not out: he
-    // lies there until someone covers him, which is exactly the original's
-    // exhaustion flow (exhaust_value exhaustion ≠ elimination).
     void checkExhausted();
-    // Moves every entrant past the starting pair to the aisle (no-op unless the
-    // Rumble rule and staggered entry are both active).
     void parkLateEntrants();
-    // Tag bookkeeping: the apron man of each team, and the corner swap.
     void setupTagTeams();
     void tryTags(const std::vector<InputFrame> &inputs);
     bool isWaitingEntrant(int index) const;
@@ -151,6 +127,7 @@ private:
     RingGeometry ring_{};
     std::vector<Wrestler> wrestlers_;
     Referee referee_;
+    RingAnnouncer announcer_;
     Rng rng_;
     std::vector<SimEvent> events_;
     MatchPhase phase_ = MatchPhase::Intro;
@@ -172,11 +149,7 @@ private:
     bool tag_mode_ = false;
     std::vector<bool> apron_;
 
-    // AI: one entity per wrestler, index-aligned. Entity 0 is the human unless
-    // setAiControlled() is called for it.
     std::vector<AiEntity> ai_;
-    // Inputs the AI wrote last frame; the original ticks the actors first and
-    // lets the AI fill the next frame's booleans.
     std::vector<InputFrame> pending_inputs_;
     std::vector<bool> ai_controlled_;
     float ai_tick_ = 0.0f;

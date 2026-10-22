@@ -501,6 +501,8 @@ public:
 
     const StateInfo *stateInfo(int id) const;
     const AnimInfo *animInfo(int id) const;
+    const AnimInfo *refereeAnimInfo(int id) const;
+    const AnimInfo *announcerAnimInfo(int id) const;
     const MoveInfo *moveInfo(int id) const;
     const ForceMove *forceMove(int id) const;
     const RamMove *ramMove(int id) const;
@@ -519,6 +521,8 @@ public:
 
     const std::vector<StateInfo> &states() const { return states_; }
     const std::vector<AnimInfo> &anims() const { return anims_; }
+    const std::vector<AnimInfo> &refereeAnims() const { return referee_anims_; }
+    const std::vector<AnimInfo> &announcerAnims() const { return announcer_anims_; }
     const std::vector<MoveInfo> &moves() const { return moves_; }
     const std::vector<WrestlerProfile> &wrestlers() const { return wrestlers_; }
     const std::vector<RuleInfo> &rules() const { return rules_; }
@@ -530,7 +534,7 @@ public:
     // Mash goal for `state_id` at `energy`, including the per-failed-pin bonus
     // (GetButtonCountGoal, GAMEPLAY_IMPLEMENTATION 3.8). Returns 0 when the
     // state has no mash row.
-    int buttonCountGoal(int state_id, float energy, int pin_attempts) const;
+    int buttonCountGoal(int state_id, float energy, int pin_attempts, int ws_table_id = -1) const;
 
     // Number of tables that failed to load, for diagnostics/tests.
     const std::vector<std::string> &warnings() const { return warnings_; }
@@ -542,6 +546,8 @@ private:
 
     std::vector<StateInfo> states_;
     std::vector<AnimInfo> anims_;
+    std::vector<AnimInfo> referee_anims_;
+    std::vector<AnimInfo> announcer_anims_;
     std::vector<MoveInfo> moves_;
     std::vector<ForceMove> force_moves_;
     std::vector<RamMove> ram_moves_;
