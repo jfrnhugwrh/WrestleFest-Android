@@ -1,12 +1,28 @@
 #include "match.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace wrestlefest {
 namespace {
 
 float lengthX(float a, float b) { return std::fabs(a - b); }
+
+// Mobility weights for solid separation: walking/running actors yield slightly
+// more than idle/stunned ones so pushing an opponent into the corner smoothly
+// slides both bodies instead of clipping through an unmoving hitbox.
+float actorMobilityWeight(const Wrestler &w) {
+    const int s = w.subState();
+    if (s == state::PUNCH || s == state::KICK || s == state::HITREACT_MID ||
+        s == state::HITREACT_HIGH || s == state::PUSHOFF) {
+        return 0.45f;
+    }
+    if (s == state::IDLE || s == state::STAND_TIRED || s == state::TAUNT) {
+        return 0.45f;
+    }
+    return 0.55f;
+}
 
 }  // namespace
 
@@ -41,6 +57,7 @@ void Match::configure(const GameData *data, const RingGeometry &ring, int rule_i
     apron_.clear();
     tag_mode_ = false;
     referee_.setup(data, &ring_, rule_ != nullptr ? rule_->max_referee_count : 3);
+    announcer_.setup(data, &ring_);
 }
 
 int Match::addWrestler(const WrestlerProfile *profile, int team, float x, float z, float facing) {
@@ -63,6 +80,7 @@ int Match::addWrestler(const WrestlerProfile *profile, int team, float x, float 
 
 void Match::playEntrance() {
     if (phase_ != MatchPhase::Intro) return;
+    announcer_.setCue(AnnouncerCue::Entrance);
     for (Wrestler &w : wrestlers_) {
         if (w.profile() == nullptr) continue;
         w.changeState(state::ENTRANCE, 0, *this);
@@ -73,11 +91,9 @@ void Match::playEntrance() {
 void Match::start() {
     phase_ = MatchPhase::Running;
     clock_ = 0.0f;
+    announcer_.setCue(AnnouncerCue::Hidden);
     emit({EventType::Bell, -1, -1, 0.0f, state::IDLE});
 
-    // Royal Rumble: hold the late entrants off the camera until their cue.
-    // They are parked in the aisle, not targetable, so the AI never looks at a
-    // wrestler who is not in the match yet.
     parkLateEntrants();
     setupTagTeams();
     entry_timer_ = 0.0f;
@@ -87,13 +103,12 @@ void Match::start() {
         if (isWaitingEntrant(i)) continue;
         w.changeState(state::IDLE, 0, *this);
     }
+    resolveBodySeparation();
 }
 
 void Match::enableStaggeredEntry(float interval, int initial_entrants) {
     entry_interval_ = std::max(0.0f, interval);
     entry_initial_ = initial_entrants;
-    // Before the bell the card can already be parked, so the entrance never
-    // shows six men standing in the ring at once.
     if (phase_ == MatchPhase::Intro) parkLateEntrants();
 }
 
@@ -130,7 +145,6 @@ void Match::updateRumbleEntries(float dt) {
         pending_entrants_.erase(pending_entrants_.begin());
         Wrestler *w = wrestler(index);
         if (w == nullptr || w->isDead()) continue;
-        // Walk in from the aisle to the left apron, facing the ring.
         w->x = ring_.leftX(ring_.centerZ()) - 40.0f;
         w->z = ring_.centerZ();
         w->facing = 1.0f;
@@ -180,6 +194,7 @@ void Match::finish(int winner_team) {
             w.changeState(state::LOSE, 0, *this);
         }
     }
+    referee_.onMatchFinished(*this);
     emit({EventType::Bell, -1, -1, 0.0f, state::VICTORY});
     emit({EventType::Victory, -1, -1, static_cast<float>(winner_team), state::VICTORY});
 }
@@ -193,8 +208,6 @@ void Match::updateOpponents() {
     for (int i = 0; i < wrestlerCount(); ++i) {
         Wrestler *self = wrestler(i);
         if (self == nullptr || self->isDead()) continue;
-        // A wrestler in the middle of a paired move keeps its partner: the pair
-        // must stay aligned until the animation finishes.
         if (self->isBusy() && self->opponentId() >= 0) continue;
         int best = -1;
         float best_distance = 0.0f;
@@ -217,44 +230,44 @@ void Match::updateOpponents() {
 }
 
 void Match::update(float dt, const std::vector<InputFrame> &inputs) {
-    clock_ += dt;
+    if (phase_ == MatchPhase::Running) {
+        clock_ += dt;
+    }
     updateRumbleEntries(dt);
     updateOpponents();
-    // Tags are resolved before the actors tick so the blue press makes the
-    // swap instead of turning into a strike. Exhaustion is checked on the same
-    // pre-tick meters so a heal cannot mask an empty bar.
     tryTags(inputs);
     checkExhausted();
 
     if (phase_ == MatchPhase::Intro && auto_start_) {
         intro_timer_ += dt;
-        // Entrance/FIGHT beat: ~1.6 s, then the bell.
         if (intro_timer_ >= 1.6f) start();
+    }
+
+    // Pre-tick solid body block so close-quarters movement/strikes resolve from
+    // non-overlapping positions every single frame.
+    if (phase_ == MatchPhase::Running) {
+        resolveBodySeparation();
     }
 
     // 1. Simulation first (the original ticks actors before the AI).
     for (int i = 0; i < wrestlerCount(); ++i) {
         Wrestler *w = wrestler(i);
         if (w == nullptr) continue;
-        // An entrant still in the aisle and the man on the apron are frozen:
-        // no ticking, no AI, no clamp.
         if (isWaitingEntrant(i) || isOnApron(i)) continue;
         InputFrame input;
-        const bool ai_driven =
-            i < static_cast<int>(ai_controlled_.size()) &&
-            ai_controlled_[static_cast<std::size_t>(i)];
-        if (ai_driven) {
-            if (i < static_cast<int>(pending_inputs_.size())) {
-                input = pending_inputs_[static_cast<std::size_t>(i)];
+        if (phase_ == MatchPhase::Running) {
+            const bool ai_driven =
+                i < static_cast<int>(ai_controlled_.size()) &&
+                ai_controlled_[static_cast<std::size_t>(i)];
+            if (ai_driven) {
+                if (i < static_cast<int>(pending_inputs_.size())) {
+                    input = pending_inputs_[static_cast<std::size_t>(i)];
+                }
+            } else if (i < static_cast<int>(inputs.size())) {
+                input = inputs[static_cast<std::size_t>(i)];
             }
-        } else if (i < static_cast<int>(inputs.size())) {
-            input = inputs[static_cast<std::size_t>(i)];
         }
         w->tick(dt, *this, input);
-        // Keep all in-ring states on the inside of the sloped rope plane. Most
-        // movement clamps locally, but paired move offsets and rebound states
-        // can also displace actors; this final sweep prevents a frame of rope
-        // penetration without affecting rumble eliminations or apron actors.
         if (w->region == region::IN_RING || w->region == region::IN_RING_ALONE) {
             w->z = ring_.clampZ(w->z);
             w->x = ring_.clampX(w->z, w->x);
@@ -277,12 +290,15 @@ void Match::update(float dt, const std::vector<InputFrame> &inputs) {
         }
     }
 
-    // 3. Referee, counts, collisions.
+    // 3. Referee, announcer, grapple beats, solid separation, region tracking.
     referee_.tick(dt, *this);
-    updateGrappleBeats(dt);
-    resolveCollisions();
-    resolveBodySeparation();
-    updateRegions();
+    announcer_.tick(dt, *this);
+    if (phase_ == MatchPhase::Running) {
+        updateGrappleBeats(dt);
+        resolveCollisions();
+        resolveBodySeparation();
+        updateRegions();
+    }
 
     // 4. Win conditions.
     if (phase_ == MatchPhase::Running) checkWinConditions(dt);
@@ -300,7 +316,6 @@ int Match::partnerIndex(int index) const {
 }
 
 float Match::apronX(int team) const {
-    // Just outside the near corner, where the aisle walk-in starts.
     return team == 0 ? ring_.leftX(ring_.centerZ()) - 46.0f
                      : ring_.rightX(ring_.centerZ()) + 46.0f;
 }
@@ -317,7 +332,6 @@ void Match::setupTagTeams() {
             team_has_active[team] = true;
             continue;
         }
-        // The team mate starts on the apron, frozen and untargetable.
         apron_[static_cast<std::size_t>(i)] = true;
         w.active = false;
         w.x = apronX(team);
@@ -332,7 +346,7 @@ void Match::tryTags(const std::vector<InputFrame> &inputs) {
     for (int i = 0; i < wrestlerCount(); ++i) {
         Wrestler *w = wrestler(i);
         if (w == nullptr || !w->active || w->isDead() || w->play_dead) continue;
-        if (w->isBusy() || w->held || w->pinned) continue;  // no tag mid-move
+        if (w->isBusy() || w->held || w->pinned) continue;
         const int partner = partnerIndex(i);
         if (partner < 0 || !isOnApron(partner)) continue;
         Wrestler *mate = wrestler(partner);
@@ -353,7 +367,6 @@ void Match::tryTags(const std::vector<InputFrame> &inputs) {
         }
         if (!frame.btn1_edge) continue;
 
-        // Swap: the tagger steps onto the apron, the partner climbs in.
         const int team = w->team;
         w->active = false;
         w->held = false;
@@ -371,8 +384,6 @@ void Match::tryTags(const std::vector<InputFrame> &inputs) {
         mate->changeState(state::IDLE, 0, *this);
         apron_[static_cast<std::size_t>(partner)] = false;
 
-        // Drop the stale press that made the tag, otherwise the fresh man is
-        // still holding blue on his first frame and tags straight back.
         if (i < static_cast<int>(pending_inputs_.size())) {
             pending_inputs_[static_cast<std::size_t>(i)].btn1_edge = false;
         }
@@ -380,11 +391,10 @@ void Match::tryTags(const std::vector<InputFrame> &inputs) {
             pending_inputs_[static_cast<std::size_t>(partner)].btn1_edge = false;
         }
 
-        // The fresh man faces the nearest enemy straight away.
         updateOpponents();
         emit({EventType::Announcer, partner, i, 0.0f, state::IDLE});
         emit({EventType::Tag, partner, i, 0.0f, state::IDLE});
-        return;  // one tag per frame
+        return;
     }
 }
 
@@ -398,17 +408,11 @@ void Match::updateGrappleBeats(float dt) {
         if (s != state::GRAPPLE_IDLE && s != state::GRAPPLE_HIGH && s != state::GRAPPLE_LOW) {
             continue;
         }
-
-        // Only the attacker runs the roll (the victim's facing points back).
         if (w->state_timer < tuning::kGrappleBeat) continue;
 
         Wrestler *other = wrestler(w->opponentId());
         if (other == nullptr) continue;
 
-        // GrappleIdleState::onTick case 7 - verbatim rules:
-        //   * within 300 px of a rope, facing it, the actor always wins;
-        //   * otherwise rand()%101 > 49 wins (51/101);
-        //   * in a Royal Rumble a second roll rand()%101 < 90 also wins.
         bool win = false;
         if (isRumble()) {
             win = rng_.range(tuning::kGrappleWinRollModulus) > tuning::kGrappleWinRollThreshold ||
@@ -422,13 +426,10 @@ void Match::updateGrappleBeats(float dt) {
         }
         w->state_timer = 0.0f;
 
-        // Royal Rumble: over the top rope. Whoever loses the exchange goes out
-        // when the rule's TossOutPercentage roll succeeds and the pair is at
-        // the ropes - the only way a Rumble ends (GAMEPLAY_IMPLEMENTATION 4.4).
         Wrestler *beat_winner = win ? w : other;
         Wrestler *beat_loser = win ? other : w;
         if (isRumble() && rule_ != nullptr) {
-            const float toss_roll = static_cast<float>(rng_.range(1000)) * 0.1f;  // 0.0-99.9
+            const float toss_roll = static_cast<float>(rng_.range(1000)) * 0.1f;
             if (toss_roll < rule_->toss_out_percentage &&
                 ring_.nearRope(beat_loser->z, beat_loser->x, tuning::kRumbleTossRange)) {
                 const int loser_id = beat_loser->id();
@@ -439,41 +440,38 @@ void Match::updateGrappleBeats(float dt) {
             }
         }
 
-        if (win) {
-            Wrestler *attacker = w;
-            Wrestler *victim = other;
-            if (attacker->profile() != nullptr) {
-                const StatusSlot &slot = attacker->profile()->status[1];
-                for (int k = 0; k < slot.list_count && k < 4; ++k) {
-                    const int move_id = slot.attack[static_cast<std::size_t>(k)];
-                    if (move_id < 0) continue;
-                    const MoveInfo *move = data_->moveInfo(move_id);
-                    if (move == nullptr) continue;
-                    attacker->beginMove(move_id);
-                    attacker->useWrestleStyle(*move, *this);
-                    emit({EventType::GrappleWon, attacker->id(), victim->id(), 0.0f,
-                          attacker->subState()});
-                    break;
+        auto launchRandomGrappleMove = [&](Wrestler *attacker) -> bool {
+            if (attacker->profile() == nullptr || data_ == nullptr) return false;
+            const StatusSlot &slot = attacker->profile()->status[1];
+            std::array<int, 4> valid{};
+            int valid_count = 0;
+            for (int k = 0; k < slot.list_count && k < 4; ++k) {
+                const int cand = slot.attack[static_cast<std::size_t>(k)];
+                if (cand >= 0 && data_->moveInfo(cand) != nullptr) {
+                    valid[static_cast<std::size_t>(valid_count++)] = cand;
                 }
+            }
+            if (valid_count <= 0) return false;
+            const int chosen = valid[static_cast<std::size_t>(rng_.range(valid_count))];
+            const MoveInfo *move = data_->moveInfo(chosen);
+            attacker->beginMove(chosen);
+            attacker->useWrestleStyle(*move, *this);
+            return true;
+        };
+
+        if (win) {
+            if (launchRandomGrappleMove(w)) {
+                emit({EventType::GrappleWon, w->id(), other->id(), 0.0f, w->subState()});
+            } else {
+                w->changeState(state::PUSHOFF, 0, *this);
+                other->changeState(state::PUSHOFF, 0, *this);
             }
         } else {
-            // The victim reverses: the tables give both sides the same slot.
-            Wrestler *attacker = other;
-            Wrestler *victim = w;
             emit({EventType::GrappleLost, w->id(), other->id(), 0.0f, w->subState()});
-            if (attacker->profile() != nullptr) {
-                const StatusSlot &slot = attacker->profile()->status[1];
-                for (int k = 0; k < slot.list_count && k < 4; ++k) {
-                    const int move_id = slot.attack[static_cast<std::size_t>(k)];
-                    if (move_id < 0) continue;
-                    const MoveInfo *move = data_->moveInfo(move_id);
-                    if (move == nullptr) continue;
-                    attacker->beginMove(move_id);
-                    attacker->useWrestleStyle(*move, *this);
-                    break;
-                }
+            if (!launchRandomGrappleMove(other)) {
+                w->changeState(state::PUSHOFF, 0, *this);
+                other->changeState(state::PUSHOFF, 0, *this);
             }
-            (void)victim;
         }
     }
 }
@@ -487,10 +485,8 @@ void Match::resolveCollisions() {
             if (b == nullptr || b->team == a->team) continue;
             if (a->subState() != state::RUN || b->subState() != state::RUN) continue;
             if (!depthOverlap(a->z, b->z, data_->common().collision_range_z)) continue;
-            if (lengthX(a->x, b->x) > 80.0f) continue;
+            if (lengthX(a->x, b->x) > tuning::kBodySeparation + 10.0f) continue;
 
-            // Two running wrestlers clash: both go to DOGFIGHT_STANDS and the
-            // pair resolves by DogfightPercentage.
             if (a->subState() != state::DOGFIGHT_STANDS) {
                 a->changeState(state::DOGFIGHT_STANDS, 0, *this);
             }
@@ -514,9 +510,6 @@ void Match::resolveCollisions() {
                 continue;
             }
             const float roll = static_cast<float>(rng_.range(100));
-            // Winner punches through, the loser is knocked back (5.3: the pair
-            // routes to DOGFIGHT_PUNCH/PUNCHED and the loser goes to
-            // KNOCKED_BACK).
             if (roll < data_->common().dogfight_percentage) {
                 w.changeState(state::DOGFIGHT_PUNCH, 0, *this);
                 other->changeState(state::KNOCKED_BACK, 0, *this);
@@ -533,37 +526,52 @@ void Match::resolveCollisions() {
 }
 
 void Match::resolveBodySeparation() {
-    // Two wrestlers on their feet cannot occupy the same spot: push them apart
-    // to a minimum gap, like the arcade's body block. Without this the pair
-    // used to converge to dx==0 and jab each other from inside the same
-    // sprite forever (no grapple, no throws, match decided on the clock).
-    // Only standing, free wrestlers separate - paired moves, the pin dive and
-    // the ground game deliberately overlap the pair.
-    for (int i = 0; i < wrestlerCount(); ++i) {
-        Wrestler *a = wrestler(i);
-        if (a == nullptr || !a->active || a->isDead() || !a->canAct()) continue;
-        if (a->region != region::IN_RING && a->region != region::IN_RING_ALONE) continue;
-        for (int j = i + 1; j < wrestlerCount(); ++j) {
-            Wrestler *b = wrestler(j);
-            if (b == nullptr || !b->active || b->isDead() || !b->canAct()) continue;
-            if (b->region != region::IN_RING && b->region != region::IN_RING_ALONE) continue;
-            if (!depthOverlap(a->z, b->z, data_->common().collision_range_z)) continue;
-            const float dx = b->x - a->x;
-            const float overlap = tuning::kBodySeparation - std::fabs(dx);
-            if (overlap <= 0.0f) continue;
-            const float dir = dx >= 0.0f ? 1.0f : -1.0f;
-            const float push = overlap * 0.5f * dir;
-            a->x -= push;
-            b->x += push;
-            a->x = ring_.clampX(a->z, a->x);
-            b->x = ring_.clampX(b->z, b->x);
+    // Solid collision layer pass: enforces kBodySeparation across ALL active
+    // StandingSolid states (including PUNCH, KICK, HITREACT_MID/HIGH, PUSHOFF,
+    // IDLE, WALK, RUN, STAND_TIRED) with rope-clamp remainder transfer so two
+    // standing sprites never overlap even in tight corners.
+    const float depth_range = data_ != nullptr ? data_->common().collision_range_z : 40.0f;
+    for (int pass = 0; pass < 2; ++pass) {
+        for (int i = 0; i < wrestlerCount(); ++i) {
+            Wrestler *a = wrestler(i);
+            if (a == nullptr || !a->active || a->isDead()) continue;
+            if (a->region != region::IN_RING && a->region != region::IN_RING_ALONE) continue;
+            const CollisionLayer layer_a = stateCollisionLayer(a->subState());
+            for (int j = i + 1; j < wrestlerCount(); ++j) {
+                Wrestler *b = wrestler(j);
+                if (b == nullptr || !b->active || b->isDead()) continue;
+                if (b->region != region::IN_RING && b->region != region::IN_RING_ALONE) continue;
+                const CollisionLayer layer_b = stateCollisionLayer(b->subState());
+
+                if (layer_a == CollisionLayer::StandingSolid &&
+                    layer_b == CollisionLayer::StandingSolid) {
+                    // Don't split two opposite-team runners right as their clash
+                    // enters DOGFIGHT_STANDS within the same frame.
+                    if (a->subState() == state::RUN && b->subState() == state::RUN &&
+                        a->team != b->team) {
+                        continue;
+                    }
+                    if (!depthOverlap(a->z, b->z, depth_range)) continue;
+                    const float fallback_dir = a->facing >= 0.0f ? 1.0f : -1.0f;
+                    separateSolidPair(ring_, true, true, tuning::kBodySeparation,
+                                      actorMobilityWeight(*a), actorMobilityWeight(*b),
+                                      fallback_dir, a->x, a->z, b->x, b->z);
+                } else if ((layer_a == CollisionLayer::StandingSolid &&
+                            layer_b == CollisionLayer::Grounded && !b->pinned && !b->held) ||
+                           (layer_b == CollisionLayer::StandingSolid &&
+                            layer_a == CollisionLayer::Grounded && !a->pinned && !a->held)) {
+                    if (!depthOverlap(a->z, b->z, depth_range)) continue;
+                    const bool a_moves = layer_a == CollisionLayer::StandingSolid;
+                    const float fallback_dir = a->facing >= 0.0f ? 1.0f : -1.0f;
+                    separateSolidPair(ring_, true, true, 38.0f, a_moves ? 1.0f : 0.0f,
+                                      a_moves ? 0.0f : 1.0f, fallback_dir, a->x, a->z, b->x, b->z);
+                }
+            }
         }
     }
 }
 
 void Match::updateRegions() {
-    // Region bookkeeping. Ropes/climbing are not simulated yet (the state table
-    // has the CLIMB* states for it); what matters here is the outside count.
     bool anyone_outside = false;
     for (Wrestler &w : wrestlers_) {
         if (w.region == region::OUTSIDE) anyone_outside = true;
@@ -585,9 +593,6 @@ void Match::updateRegions() {
 }
 
 void Match::checkExhausted() {
-    // With pins available an empty bar means "can be pinned", never a direct
-    // elimination: the wrestler lies down until he is covered for the three.
-    // Only pin-less rules (Royal Rumble) eliminate on exhaustion.
     if (rule_ != nullptr && rule_->can_pin) return;
     for (int i = 0; i < wrestlerCount(); ++i) {
         Wrestler *w = wrestler(i);
@@ -600,8 +605,6 @@ void Match::checkExhausted() {
 void Match::checkWinConditions(float dt) {
     (void)dt;
 
-    // Royal Rumble: last wrestler still standing wins. Each entrant is his own
-    // side, so the team checks below do not apply.
     if (isRumble()) {
         if (!pending_entrants_.empty()) return;
         int alive = 0;
@@ -618,8 +621,10 @@ void Match::checkWinConditions(float dt) {
         return;
     }
 
-    // 1. Pinfall: the referee reached MaxRefereeCount with a wrestler pinned.
-    if (rule_ != nullptr && rule_->can_pin && referee_.count() >= referee_.maxCount()) {
+    // 1. Pinfall: awarded strictly once the referee has arrived at the cover,
+    //    dropped onto the canvas, counted all three manual slaps, and finished
+    //    the 3rd mat-slap beat.
+    if (rule_ != nullptr && rule_->can_pin && referee_.pinAwarded()) {
         for (int i = 0; i < wrestlerCount(); ++i) {
             Wrestler *w = wrestler(i);
             if (w != nullptr && w->pinned) {
@@ -646,8 +651,6 @@ void Match::checkWinConditions(float dt) {
 
     // 3. Count-out.
     if (outside_count_ >= (rule_ != nullptr ? rule_->max_outside_count : 20)) {
-        // Everyone outside: no elimination, the count restarts (the original
-        // fires the "all outside" listener instead).
         outside_count_ = 0;
     }
 

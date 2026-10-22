@@ -168,8 +168,21 @@ void testTables(const std::string &assets) {
 
     // Move families resolve through _stateMaping.
     check(moveFamilyEntryState(0) == state::USE_CL_WS, "family 0 maps to USE_CL_WS");
+    check(moveFamilyEntryState(12) == state::USE_RFWS,
+          "family 12 (Spear/Trouble in Paradise/La Mistica) maps to USE_RFWS");
     check(data.moveInfo(0) != nullptr && data.moveInfo(0)->name == "WS_PUNCH",
           "move 0 is WS_PUNCH");
+
+    // Official animation tables (RefereeAT.sml + AnnouncerAT.sml).
+    check(data.refereeAnims().size() == 6, "RefereeAT has 6 animations");
+    const AnimInfo *ref_count_anim = data.refereeAnimInfo(2);
+    check(ref_count_anim != nullptr && ref_count_anim->frame_count == 16 &&
+              ref_count_anim->frames[0] == 5 && ref_count_anim->frames[10] == 6,
+          "RefereeAT countdown anim plays [5x10, 6x6] mat slap");
+    check(data.announcerAnims().size() == 6, "AnnouncerAT has 6 animations");
+    const AnimInfo *ann_exit = data.announcerAnimInfo(5);
+    check(ann_exit != nullptr && ann_exit->frame_count == 16 && ann_exit->frames[0] == 9,
+          "AnnouncerAT pass-rope-out anim loaded");
 
     // WSTable rows are reachable by id.
     check(data.forceMove(0) != nullptr, "ForceWSTable row 0");

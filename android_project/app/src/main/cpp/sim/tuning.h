@@ -17,37 +17,32 @@ constexpr float kRumbleTossRange = 150.0f;           // toss-outs only at the ro
 constexpr float kAiRunRange = 260.0f;               // AI sprints to close a gap this big
 constexpr float kTagReach = 70.0f;                  // how close the corner must be to tag
 constexpr float kTagEnergyFraction = 0.35f;         // AI tags out below this energy
-constexpr float kGrappleBeat = 0.30f;              // 0x3e99999a GrappleIdleState::onEnter
-constexpr float kReactionBeat = 0.30f;             // 0x3e99999a BeAttackedState::onEnter
+constexpr float kGrappleBeat = 0.30f;               // 0x3e99999a GrappleIdleState::onEnter
+constexpr float kReactionBeat = 0.30f;              // 0x3e99999a BeAttackedState::onEnter
 constexpr float kReactionBeatPerStrength = -0.023f;  // 0xbcbc6a7f
-constexpr float kDogfightBeat = 0.18f;             // 0x3e3851ec DogfightState::onEnter
+constexpr float kDogfightBeat = 0.18f;              // 0x3e3851ec DogfightState::onEnter
 constexpr float kDogfightBeatPerStrength = -0.0126f;  // 0xbc4e703b
-constexpr float kHeldBeat = 0.10f;                 // 0x3dcccccd BeHeldState::onEnter
-constexpr float kPinEscapeBase = 0.12f;            // 0x3df5c28f BePinState::onEnter
-constexpr float kPinEscapeRand = 7.63e-7f;         // 0x354cce67 * (rand() & 0x7fff)
+constexpr float kHeldBeat = 0.10f;                  // 0x3dcccccd BeHeldState::onEnter
+constexpr float kPinEscapeBase = 0.12f;             // 0x3df5c28f BePinState::onEnter
+constexpr float kPinEscapeRand = 7.63e-7f;          // 0x354cce67 * (rand() & 0x7fff)
 
-// --- Grapple struggle --------------------------------------------------------
-// The original's 300 px rope force is measured in its wider ring space; at the
-// 960x640 logical scale our trapezoid is ~520-680 px wide, so 300 px would make
-// every clinch an automatic win. 90 px is the ropes in practice.
-constexpr float kGrappleBeatForcedRange = 90.0f;  // 0x43960000 collisionRing(actor,300,facing)
-constexpr int kGrappleWinRollModulus = 101;        // umod 0x65
-constexpr int kGrappleWinRollThreshold = 49;       // cmp 0x31 -> win when roll > 49
-constexpr int kGrappleWinRollRumble = 90;          // cmp 0x5a -> win when roll < 90
+// --- Grapple struggle & anti-soft-lock caps ----------------------------------
+constexpr float kGrappleBeatForcedRange = 90.0f;    // 0x43960000 collisionRing(actor,300,facing)
+constexpr int kGrappleWinRollModulus = 101;         // umod 0x65
+constexpr int kGrappleWinRollThreshold = 49;        // cmp 0x31 -> win when roll > 49
+constexpr int kGrappleWinRollRumble = 90;           // cmp 0x5a -> win when roll < 90
+constexpr float kMaxClinchDuration = 2.0f;          // BaseInfo MaxBeHeadlockedTime upper bound
+constexpr int kMaxNeutralComboHits = 3;             // standing strike string knockdown cap
+constexpr int kMaxClinchStrikes = 2;                // neutral clinch knee/punch cap before break
+constexpr float kComboResetWindow = 0.85f;          // combo counter decay between exchanges
+constexpr float kGrappleReengageCooldown = 0.35f;   // prevents frame-1 re-lock after pushoff
 
 // --- Movement ---------------------------------------------------------------
-// Keep the original 30 fps animation clock, but run the match simulation at a
-// slightly gentler pace on touch devices. This scales the full gameplay clock
-// (movement, reactions, and match timer) consistently instead of making only
-// movement feel sluggish.
 constexpr float kGameSpeedScale = 0.78f;
-// HandleAutoWalk clamps a step to 20 px per *frame* at 30 fps = 600 px/s; the
-// per-wrestler WalkFactorX/RunFactorX values are the real limiter.
 constexpr float kMaxWalkStepPerSecond = 600.0f;
 constexpr float kSourceFps = 30.0f;  // animation frame rate of the original
 
 // --- Energy ------------------------------------------------------------------
-// The HUD bar is a one-way ghost: it only ever lags behind a *drop* (CWrestler::Tick).
 constexpr float kEnergyBarDrainRate = -10.0f;  // 0xc1200000
 
 // --- Timing / math -----------------------------------------------------------
@@ -56,30 +51,36 @@ constexpr int kMaxStepsPerFrame = 4;
 constexpr int kStateStackDepth = 4;
 constexpr int kNoState = 0xff;
 
-// --- AI reaction windows (GAMEPLAY_IMPLEMENTATION 5.1) ------------------------
-constexpr float kRingSideReaction = 0.5f;   // RingSideState delay before climbing in
+// --- AI reaction windows (GAMEPLAY_IMPLEMENTATION 5.1) -----------------------
+constexpr float kRingSideReaction = 0.5f;
 constexpr float kSearchEnemyInterval = 0.25f;
-constexpr float kOutsideCountReaction = 10.0f;  // ref count > 10 -> AI leaves the floor
+constexpr float kOutsideCountReaction = 10.0f;
 
-// --- Port decisions ----------------------------------------------------------
-// Strike impact frame: the original's per-state tick bodies are jump tables, so
-// the frame at which a punch lands is calibrated (GAMEPLAY_IMPLEMENTATION 11.3).
-// 2 of 4 frames matches the arm crossing the target's head.
+// --- Solid body & close-quarters combat geometry (0.72x logical space) -------
+// At kArtScale = 0.72, standing wrestler sprites span ~84-91 px across the
+// shoulders/arms, while punch_c/kick_b reach +97..+103 px and StateTable reach
+// values are GRAPPLE=100, PUNCH=110, KICK=120. Keeping solid standing bodies at
+// 80 px prevents torso clipping while placing fists/boots squarely on target.
 constexpr float kStrikeImpactFraction = 0.5f;
-// Damage applies at this fraction of a signature move when HurtTimming is absent.
 constexpr float kForceImpactFraction = 0.45f;
-// Failsafe for the victim of a paired move (BE_USED_* / PICKUPED): the owner of
-// the pair is expected to route the victim out within its animation. If the
-// pair is broken (owner hit by a third party, desync in a multi-man match) the
-// victim recovers on their own after this long. No paired clip exceeds ~0.9 s.
 constexpr float kVictimHoldMax = 3.0f;
-// Standing wrestlers cannot stack into the same sprite: the arcade's body
-// block kept them at arm's length, which is also what makes grapple range
-// meaningful (grapple reach is 110).
-constexpr float kBodySeparation = 46.0f;
+constexpr float kBodySeparation = 80.0f;
+constexpr float kCloseStrikeOverlap = 24.0f;
+constexpr float kStrikePushback = 14.0f;
+constexpr float kKnockdownPushback = 36.0f;
+
+// --- Referee movement & officiating (CRef::StateOnEnterRef / StateTickRef) ---
+constexpr float kRefWalkSpeedX = 225.0f;
+constexpr float kRefWalkSpeedZ = 250.0f;
+constexpr float kRefTrackDeadbandX = 75.0f;   // 0x43160000 (150) scaled to 960-wide ring
+constexpr float kRefTrackDeadbandZ = 65.0f;   // 0x432f0000 (175) scaled to 192-deep ring
+constexpr float kRefArriveEpsilon = 8.0f;     // 0x41200000 arrival gate on both X and Z
+constexpr float kRefPinOffsetX = 132.0f;      // places kneeling hand cleanly beside shoulders
+constexpr float kRefCanvasDropTime = 0.20f;   // 6 frames at 30 fps for countdown (1).png
+constexpr float kPairedOffsetScale = 0.78f;   // aligns paired grapple/throw hands at 0.72x scale
+
 // The original's input bits 0xa8/0xa9 are *edge* pulses, so its mash counters
-// count real presses, not held frames. The AI therefore mashes on a cadence:
-// one press about every kAiMashPeriod seconds (BePinState's 0.12 s beat).
+// count real presses, not held frames.
 constexpr float kAiMashPeriod = 0.12f;
 
 }  // namespace tuning

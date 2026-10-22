@@ -39,9 +39,10 @@ public:
     void end();
 
     void drawArenaBackground();
-    // The man in stripes. Same anchoring rule as the wrestlers, but his frames
-    // are plain PNGs described by graphics/Sprites/Character/Ref/refData.sml.
+    // Officials in the ring: frames come straight from refData.sml (0..13) and
+    // announcerData.sml (0..12), selected deterministically by the simulation.
     void drawReferee(const Match &match);
+    void drawAnnouncer(const Match &match);
     // Draws one animation frame of a wrestler at an arbitrary spot - used by the
     // select screen for the idle portrait inside the frame.
     void drawActorPortrait(const WrestlerProfile &profile, int sst_id, float center_x,
@@ -143,6 +144,7 @@ public:
 private:
     bool loadUi();
     bool loadReferee();
+    bool loadAnnouncer();
     // Fetches (and caches) one animation frame of a wrestler bundle.
     const FrameTexture *frameFor(const WrestlerProfile &profile, int sst_id);
     void drawEnergyBar(const EnergyBarAssets &assets, const Wrestler &wrestler, float x,
@@ -187,19 +189,14 @@ private:
     Texture ref_count_[10];
     Texture ref_middle_;
     Texture ref_infinite_;
-    // Referee (PNG frames, no palette)
+    // Referee and ring announcer frames (PNGs, indexed in exact .sml order).
     struct RefFrame {
         Texture texture;
         float x_offset = 0.0f;
         float y_offset = 0.0f;
     };
-    std::vector<RefFrame> ref_frames_;  // in refData.sml order
-    // Indices into ref_frames_ (refData.sml row order).
-    int ref_walk_frames_[4] = {10, 11, 12, 13};  // mike_1..4
-    int ref_count_frames_[3] = {7, 8, 9};        // countdown (1..3)
-    int ref_warn_frames_[2] = {5, 6};            // Warn (1..2)
-    int ref_judge_frames_[3] = {2, 3, 4};        // Judgment (1..3)
-    int ref_ask_frames_[2] = {0, 1};             // Ask give up (1..2)
+    std::vector<RefFrame> ref_frames_;        // graphics/Sprites/Character/Ref/refData.sml (0..13)
+    std::vector<RefFrame> announcer_frames_;  // graphics/Sprites/Character/Announcer/Robert/announcerData.sml (0..12)
 
     Texture virtual_stick_base_;
     Texture virtual_stick_icon_;

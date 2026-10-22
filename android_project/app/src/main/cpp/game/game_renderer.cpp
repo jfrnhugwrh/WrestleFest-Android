@@ -63,6 +63,7 @@ bool GameRenderer::initialize(AssetLoader *assets, const GameData *data) {
 
     loadUi();
     loadReferee();
+    loadAnnouncer();
     loadArena("ARENA02");
     return true;
 }
@@ -114,6 +115,14 @@ void GameRenderer::shutdown() {
     }
     avatars_.clear();
     arena_scenes_.clear();
+    for (RefFrame &frame : ref_frames_) {
+        if (frame.texture.valid()) glDeleteTextures(1, &frame.texture.id);
+    }
+    ref_frames_.clear();
+    for (RefFrame &frame : announcer_frames_) {
+        if (frame.texture.valid()) glDeleteTextures(1, &frame.texture.id);
+    }
+    announcer_frames_.clear();
     for (auto &bundle : bundles_) {
         for (auto &entry : bundle.second.textures) {
             if (entry.second.indices.valid()) glDeleteTextures(1, &entry.second.indices.id);
@@ -277,6 +286,38 @@ bool GameRenderer::loadReferee() {
         ref_frames_.push_back(frame);
     }
     return !ref_frames_.empty();
+}
+
+bool GameRenderer::loadAnnouncer() {
+    std::vector<std::uint8_t> bytes;
+    const std::string base = "graphics/Sprites/Character/Announcer/Robert/";
+    if (assets_ == nullptr || !assets_->readAsset(base + "announcerData.sml", &bytes)) {
+        return false;
+    }
+    SmlDocument doc;
+    std::string error;
+    if (!doc.parse(reinterpret_cast<const char *>(bytes.data()), bytes.size(), &error)) {
+        __android_log_print(ANDROID_LOG_WARN, kLogTag, "announcerData.sml: %s", error.c_str());
+        return false;
+    }
+    for (const SmlRecord &record : doc.records) {
+        RefFrame frame;
+        const std::string name = record.string("name");
+        if (name.empty()) continue;
+        std::vector<std::uint8_t> png;
+        if (!assets_->readAsset(base + name, &png)) {
+            announcer_frames_.push_back(frame);
+            continue;
+        }
+        Image image;
+        if (decodePng(png.data(), png.size(), &image)) {
+            frame.texture = batch_.uploadRgba(image);
+            frame.x_offset = static_cast<float>(record.number("xoffset"));
+            frame.y_offset = static_cast<float>(record.number("yoffset"));
+        }
+        announcer_frames_.push_back(frame);
+    }
+    return !announcer_frames_.empty();
 }
 
 void GameRenderer::begin(int viewport_x, int viewport_y, int viewport_w, int viewport_h) {
@@ -451,45 +492,19 @@ void GameRenderer::drawActorPortrait(const WrestlerProfile &profile, int sst_id,
 }
 
 void GameRenderer::drawReferee(const Match &match) {
-    if (ref_frames_.empty()) return;
+    if (!match.rule().have_referee || ref_frames_.empty()) return;
     const Referee &ref = match.referee();
-
-    // Pick the pose: the three-finger count while pinning, a warning wave when
-    // he is chasing a wrestler out of the ring, otherwise the walk cycle.
-    // Pose selection follows the referee's sub-state: a three-finger count on a
-    // pin, "ask give up" on a submission, a warning wave when he has to get a
-    // wrestler back in the ring, and the mike_* walk cycle otherwise.
-    int frame = ref_walk_frames_[static_cast<int>(match.clock() / 0.3f) & 3];
-    switch (ref.sub()) {
-        case RefSub::PinCount:
-            frame = ref_count_frames_[std::clamp(ref.count(), 1, 3) - 1];
-            break;
-        case RefSub::GiveUp:
-            frame = ref_ask_frames_[static_cast<int>(match.clock() / 0.5f) & 1];
-            break;
-        case RefSub::TagBreak:
-            frame = ref_warn_frames_[static_cast<int>(match.clock() / 0.4f) & 1];
-            break;
-        case RefSub::MoveToPosition:
-            frame = ref_walk_frames_[static_cast<int>(match.clock() / 0.2f) & 3];
-            break;
-        case RefSub::None:
-        default:
-            if (ref.master() == RefMaster::Outside || match.outsideCount() > 0) {
-                frame = ref_warn_frames_[static_cast<int>(match.clock() / 0.5f) & 1];
-            } else if (ref.master() == RefMaster::Watch) {
-                frame = ref_judge_frames_[static_cast<int>(match.clock() / 0.6f) % 3];
-            }
-            break;
-    }
+    const int frame = ref.spriteId();
     if (frame < 0 || frame >= static_cast<int>(ref_frames_.size())) return;
     const RefFrame &sprite = ref_frames_[static_cast<std::size_t>(frame)];
     if (!sprite.texture.valid()) return;
     const float scale = kArtScale;
-    const float width = sprite.texture.width * scale;
-    const float height = sprite.texture.height * scale;
-    const float left = ref.facing >= 0.0f ? ref.x - sprite.x_offset * scale
-                                          : ref.x - (sprite.texture.width - sprite.x_offset) * scale;
+    const float width = static_cast<float>(sprite.texture.width) * scale;
+    const float height = static_cast<float>(sprite.texture.height) * scale;
+    const float left =
+        ref.facing >= 0.0f
+            ? ref.x - sprite.x_offset * scale
+            : ref.x - (static_cast<float>(sprite.texture.width) - sprite.x_offset) * scale;
     const float top = (ref.z - ref.y) - sprite.y_offset * scale;
     if (arena_.shadow.valid()) {
         const float shadow_w = 96.0f * scale;
@@ -500,27 +515,80 @@ void GameRenderer::drawReferee(const Match &match) {
     batch_.draw(sprite.texture, left, top, width, height, Color{}, ref.facing < 0.0f);
 }
 
+void GameRenderer::drawAnnouncer(const Match &match) {
+    const RingAnnouncer &announcer = match.announcer();
+    if (!announcer.visible() || announcer_frames_.empty()) return;
+    const int frame = announcer.spriteId();
+    if (frame < 0 || frame >= static_cast<int>(announcer_frames_.size())) return;
+    const RefFrame &sprite = announcer_frames_[static_cast<std::size_t>(frame)];
+    if (!sprite.texture.valid()) return;
+    const float scale = kArtScale;
+    const float width = static_cast<float>(sprite.texture.width) * scale;
+    const float height = static_cast<float>(sprite.texture.height) * scale;
+    const float left =
+        announcer.facing >= 0.0f
+            ? announcer.x - sprite.x_offset * scale
+            : announcer.x - (static_cast<float>(sprite.texture.width) - sprite.x_offset) * scale;
+    const float top = (announcer.z - announcer.y) - sprite.y_offset * scale;
+    if (arena_.shadow.valid()) {
+        const float shadow_w = 88.0f * scale;
+        const float shadow_h = 24.0f * scale;
+        batch_.draw(arena_.shadow, announcer.x - shadow_w * 0.5f,
+                    (announcer.z - announcer.y) - shadow_h * 0.62f, shadow_w, shadow_h,
+                    Color{1.0f, 1.0f, 1.0f, 0.45f * announcer.alpha()});
+    }
+    batch_.draw(sprite.texture, left, top, width, height, Color{1.0f, 1.0f, 1.0f, announcer.alpha()},
+                announcer.facing < 0.0f);
+}
+
 void GameRenderer::drawMatch(const Match &match, float alpha) {
     drawArenaBackground();
 
-    // Sort by depth: far wrestlers first (the original uses draw layers).
-    std::vector<const Wrestler *> actors;
-    actors.reserve(static_cast<std::size_t>(match.wrestlerCount()));
+    // Unified depth sort across ALL visible ring entities (wrestlers, referee,
+    // and pre-match ring announcer) so nobody ever pops across a hardcoded Z
+    // plane and downed bodies always render underneath standing covers!
+    enum class DrawKind { Wrestler, Referee, Announcer };
+    struct DrawItem {
+        float z = 0.0f;
+        int priority = 0;
+        DrawKind kind = DrawKind::Wrestler;
+        const Wrestler *wrestler = nullptr;
+    };
+
+    std::vector<DrawItem> items;
+    items.reserve(static_cast<std::size_t>(match.wrestlerCount()) + 2);
     for (int i = 0; i < match.wrestlerCount(); ++i) {
         const Wrestler *w = match.wrestler(i);
-        if (w != nullptr) actors.push_back(w);
+        if (w == nullptr || w->hidden()) continue;
+        // Grounded/pinned victims draw just behind covering/standing attackers
+        // sharing the exact same Z coordinate (AdjustOpponentXZ).
+        const int prio = w->isDown() ? (w->layer - 2) : w->layer;
+        items.push_back({w->z, prio, DrawKind::Wrestler, w});
     }
-    std::stable_sort(actors.begin(), actors.end(), [](const Wrestler *a, const Wrestler *b) {
-        if (a->z != b->z) return a->z < b->z;
-        return a->layer < b->layer;
+    if (match.rule().have_referee) {
+        items.push_back({match.referee().z, 1, DrawKind::Referee, nullptr});
+    }
+    if (match.announcer().visible()) {
+        items.push_back({match.announcer().z, 0, DrawKind::Announcer, nullptr});
+    }
+
+    std::stable_sort(items.begin(), items.end(), [](const DrawItem &a, const DrawItem &b) {
+        if (a.z != b.z) return a.z < b.z;
+        return a.priority < b.priority;
     });
-    // The referee sorts with the actors by depth.
-    if (match.referee().z < 480.0f) {
-        drawReferee(match);
-        for (const Wrestler *actor : actors) drawActor(*actor, alpha);
-    } else {
-        for (const Wrestler *actor : actors) drawActor(*actor, alpha);
-        drawReferee(match);
+
+    for (const DrawItem &item : items) {
+        switch (item.kind) {
+            case DrawKind::Wrestler:
+                drawActor(*item.wrestler, alpha);
+                break;
+            case DrawKind::Referee:
+                drawReferee(match);
+                break;
+            case DrawKind::Announcer:
+                drawAnnouncer(match);
+                break;
+        }
     }
 
     drawArenaFront();
@@ -673,13 +741,15 @@ void GameRenderer::drawHud(const Match &match, int player_index) {
         }
     }
 
-    // Referee count, big and centred, while a pin is being counted.
-    if (match.referee().counting()) {
+    // Referee count: strictly synchronized to physical mat-slap events (>= 1).
+    // Never displays "0" while the referee is still walking or kneeling down.
+    if (match.referee().showingPinCount()) {
         const int value = match.referee().count();
-        if (value >= 0 && value <= 9 && ref_count_[value].valid()) {
-            const float scale = 2.4f;
-            batch_.draw(ref_count_[value], 480.0f - 23.0f * scale * 0.5f, 190.0f,
-                        23.0f * scale, 43.0f * scale, Color{});
+        if (value >= 1 && value <= 9 && ref_count_[value].valid()) {
+            const float scale = 2.4f * match.referee().countPopScale();
+            const float w = 23.0f * scale;
+            const float h = 43.0f * scale;
+            batch_.draw(ref_count_[value], 480.0f - w * 0.5f, 241.5f - h * 0.5f, w, h, Color{});
         }
     }
 

@@ -928,6 +928,344 @@ int main(int argc, char **argv) {
     }
 
     // ------------------------------------------------------------------
+    std::printf("[close-quarters collision & strike knockdown]\n");
+    {
+        // Bug 1 regression: two wrestlers walking continuously into each other
+        // (both at center ring and pinned right against the ropes) must never
+        // clip below kBodySeparation even across active strikes/hit-reactions,
+        // must auto-face in IDLE, and 3 consecutive neutral strikes force a
+        // knockdown so close-quarters exchanges cannot stall indefinitely.
+        Match match;
+        match.configure(&data, ring, 0, 0x4242u);
+        match.addWrestler(data.wrestlerByFolder("00_John Cena"), 0, ring.centerX() - 45.0f,
+                          ring.centerZ(), 1.0f);
+        match.addWrestler(data.wrestlerByFolder("03_BigShow"), 1, ring.centerX() + 45.0f,
+                          ring.centerZ(), -1.0f);
+        match.setAiControlled(0, false);
+        match.setAiControlled(1, false);
+        match.start();
+
+        float min_standing_gap = 1.0e9f;
+        int knockdowns = 0;
+        for (int step = 0; step < 90; ++step) {
+            std::vector<InputFrame> in(2);
+            in[0].right = true;
+            in[1].left = true;
+            if (step % 10 == 2) {
+                in[0].right = false;  // neutral strike while chest-to-chest
+                in[0].btn0 = true;
+                in[0].btn0_edge = true;
+            }
+            match.update(1.0f / 60.0f, in);
+            for (const SimEvent &ev : match.events()) {
+                if (ev.type == EventType::KnockDown) ++knockdowns;
+            }
+            match.clearEvents();
+            const Wrestler *a = match.wrestler(0);
+            const Wrestler *b = match.wrestler(1);
+            if (stateCollisionLayer(a->subState()) == CollisionLayer::StandingSolid &&
+                stateCollisionLayer(b->subState()) == CollisionLayer::StandingSolid) {
+                min_standing_gap = std::min(min_standing_gap, std::fabs(b->x - a->x));
+            }
+        }
+        check(min_standing_gap >= tuning::kBodySeparation - 1.0f,
+              "close-quarters strikes & walks preserve solid hurtbox separation");
+        check(knockdowns >= 1,
+              "neutral strike combo resolves cleanly into a knockdown");
+
+        // Rope-corner compression check: shoving an idle opponent directly into
+        // the right rope must transfer the clamp remainder back onto the walker
+        // instead of collapsing dx toward 0.
+        Match corner;
+        corner.configure(&data, ring, 0, 0x5151u);
+        const float z = ring.centerZ();
+        corner.addWrestler(data.wrestlerByFolder("00_John Cena"), 0, ring.rightX(z) - 90.0f, z,
+                           1.0f);
+        corner.addWrestler(data.wrestlerByFolder("01_TripleH"), 1, ring.rightX(z) - 8.0f, z,
+                           -1.0f);
+        corner.setAiControlled(0, false);
+        corner.setAiControlled(1, false);
+        corner.start();
+        std::vector<InputFrame> push_right(2);
+        push_right[0].right = true;
+        float min_corner_gap = 1.0e9f;
+        for (int step = 0; step < 60; ++step) {
+            corner.update(1.0f / 60.0f, push_right);
+            corner.clearEvents();
+            min_corner_gap =
+                std::min(min_corner_gap, std::fabs(corner.wrestler(1)->x - corner.wrestler(0)->x));
+        }
+        check(min_corner_gap >= tuning::kBodySeparation - 1.0f,
+              "rope-corner body block prevents overlapping models at the ropes");
+    }
+
+    // ------------------------------------------------------------------
+    std::printf("[entrance & official state continuity]\n");
+    {
+        // Bug 2 regression: during pre-match intro cutscenes, match clock stays
+        // at 0, referee never snaps to kneeling/judgment frames, announcer runs
+        // linear cues and exits before the bell, and wrestler EntranceInfo
+        // clips never modulo-wrap backward to clip 0.
+        Match match;
+        match.configure(&data, ring, 0, 0x9001u);
+        match.addWrestler(data.wrestlerByFolder("00_John Cena"), 0, ring.centerX() - 110.0f,
+                          ring.centerZ(), 1.0f);
+        match.addWrestler(data.wrestlerByFolder("03_BigShow"), 1, ring.centerX() + 110.0f,
+                          ring.centerZ(), -1.0f);
+        match.allowAutoStart(false);
+        match.playEntrance();
+
+        std::vector<InputFrame> idle(2);
+        bool ref_snapped = false;
+        const float initial_ref_x = match.referee().x;
+        const float initial_ref_z = match.referee().z;
+        check(match.announcer().visible(), "ring announcer appears for pre-match intro");
+
+        const AnnouncerCue cues[4] = {AnnouncerCue::Entrance, AnnouncerCue::AnnounceLeft,
+                                      AnnouncerCue::AnnounceRight, AnnouncerCue::FightExit};
+        for (int c = 0; c < 4; ++c) {
+            match.setAnnouncerCue(cues[c]);
+            for (int step = 0; step < 90; ++step) {
+                match.update(1.0f / 60.0f, idle);
+                match.clearEvents();
+                if (match.referee().spriteId() != 0 ||
+                    std::fabs(match.referee().x - initial_ref_x) > 0.01f ||
+                    std::fabs(match.referee().z - initial_ref_z) > 0.01f) {
+                    ref_snapped = true;
+                }
+            }
+        }
+        check(!ref_snapped, "referee holds steady idle frame without snapping or teleporting");
+        checkNear(match.clock(), 0.0f, 0.001f, "match clock stays frozen during Intro");
+        match.start();
+        match.update(1.0f / 60.0f, idle);
+        check(!match.announcer().visible(), "ring announcer leaves the ring once the bell rings");
+    }
+
+    // ------------------------------------------------------------------
+    std::printf("[referee AI tracking, corner pins & UI sync]\n");
+    {
+        // Bugs 3 & 4 regression:
+        //   * Active Watch updates referee (x, z) to follow combatants across
+        //     all ring quadrants smoothly without teleporting.
+        //   * Pinfall near the right rope (where +280 previously deadlocked at
+        //     count == 0 forever) walks to an in-bounds spot beside shoulders,
+        //     keeps count/UI hidden while walking, drops to canvas (frame 4),
+        //     and increments 1..2..3 strictly on mat-slap frames (frame 6).
+        Match match;
+        match.configure(&data, ring, 0, 0x3333u);
+        match.addWrestler(data.wrestlerByFolder("00_John Cena"), 0, ring.leftX(520.0f) + 45.0f,
+                          520.0f, 1.0f);
+        match.addWrestler(data.wrestlerByFolder("03_BigShow"), 1, ring.leftX(520.0f) + 135.0f,
+                          520.0f, -1.0f);
+        match.setAiControlled(0, false);
+        match.setAiControlled(1, false);
+        match.start();
+
+        const float start_ref_x = match.referee().x;
+        const float start_ref_z = match.referee().z;
+        float max_ref_step = 0.0f;
+        float prev_rx = start_ref_x;
+        float prev_rz = start_ref_z;
+        std::vector<InputFrame> idle(2);
+        for (int step = 0; step < 90; ++step) {
+            match.update(1.0f / 60.0f, idle);
+            match.clearEvents();
+            max_ref_step = std::max(max_ref_step,
+                                    std::hypot(match.referee().x - prev_rx,
+                                               match.referee().z - prev_rz));
+            prev_rx = match.referee().x;
+            prev_rz = match.referee().z;
+        }
+        const float moved_dist =
+            std::hypot(match.referee().x - start_ref_x, match.referee().z - start_ref_z);
+        check(moved_dist > 30.0f, "referee actively repositions to track combatants");
+        check(max_ref_step < 10.0f, "referee moves smoothly frame-by-frame without teleporting");
+
+        // Now move wrestlers to the far bottom-right corner and trigger a pin:
+        // referee must run all the way across the ring, drop onto knees, and
+        // never display UI count before the first physical mat slap!
+        const float pin_z = 530.0f;
+        Wrestler *attacker = match.wrestler(0);
+        Wrestler *victim = match.wrestler(1);
+        attacker->x = ring.rightX(pin_z) - 85.0f;
+        attacker->z = pin_z;
+        victim->x = ring.rightX(pin_z) - 25.0f;
+        victim->z = pin_z;
+        victim->energy = 8.0f;
+        victim->energy_display = 8.0f;
+        victim->changeState(state::ONGROUND, 0, match);
+
+        std::vector<InputFrame> cover(2);
+        cover[0].btn1 = true;
+        cover[0].btn1_edge = true;
+        match.update(1.0f / 60.0f, cover);
+        match.clearEvents();
+
+        bool saw_approach_without_ui = false;
+        bool saw_canvas_drop_pose = false;
+        bool premature_ui_count = false;
+        bool non_slap_increment = false;
+        bool any_ref_teleport = false;
+        int prev_count = 0;
+        int steps = 0;
+        while (match.phase() != MatchPhase::Finished && steps < 60 * 10) {
+            const float rx_before = match.referee().x;
+            match.update(1.0f / 60.0f, idle);
+            match.clearEvents();
+            ++steps;
+            if (std::fabs(match.referee().x - rx_before) >= 8.0f) any_ref_teleport = true;
+            if (match.referee().approachingPin()) {
+                saw_approach_without_ui = true;
+                if (match.referee().showingPinCount() || match.referee().count() != 0) {
+                    premature_ui_count = true;
+                }
+            }
+            if (match.referee().spriteId() == 4) {
+                saw_canvas_drop_pose = true;
+                if (match.referee().showingPinCount()) premature_ui_count = true;
+            }
+            if (match.referee().count() > prev_count) {
+                if (!match.referee().droppedToCanvas() || match.referee().spriteId() != 6) {
+                    non_slap_increment = true;
+                }
+                prev_count = match.referee().count();
+            }
+        }
+        check(!any_ref_teleport, "no referee teleport during pin");
+        check(saw_approach_without_ui, "referee physically runs across the ring to the cover");
+        check(!premature_ui_count, "UI count stays hidden until referee drops and slaps canvas");
+        check(saw_canvas_drop_pose, "referee plays kneeling canvas-drop transition (sprite 4)");
+        check(!non_slap_increment, "every count 1..3 triggers strictly on mat-slap frame 6");
+        check(match.phase() == MatchPhase::Finished && match.winnerTeam() == 0,
+              "right-rope corner pin completes cleanly without deadlocking");
+        check(match.referee().master() == RefMaster::Judgment,
+              "referee enters Ref Judgment to call for the bell");
+    }
+
+    // ------------------------------------------------------------------
+    std::printf("[grapple soft-lock & TypeID 12 regression]\n");
+    {
+        // Bug 5 regression:
+        //   1. Pure neutral mashing inside a grapple with no throws never loops
+        //      forever; clinch strike cap forces a clean knockdown break.
+        //   2. Passive clinch with empty throw slots breaks cleanly via the
+        //      monotonic kMaxClinchDuration watchdog.
+        //   3. TypeID 12 moves (WS_Spear = 52) execute cleanly through USE_RFWS
+        //      and knock down the opponent instead of misrouting to RamWSTable.
+        Match clinch_mash;
+        clinch_mash.configure(&data, ring, 0, 0x7788u);
+        clinch_mash.addWrestler(data.wrestlerByFolder("00_John Cena"), 0,
+                                ring.centerX() - 45.0f, ring.centerZ(), 1.0f);
+        clinch_mash.addWrestler(data.wrestlerByFolder("03_BigShow"), 1,
+                                ring.centerX() + 45.0f, ring.centerZ(), -1.0f);
+        clinch_mash.setAiControlled(0, false);
+        clinch_mash.setAiControlled(1, false);
+        clinch_mash.start();
+
+        Wrestler *a = clinch_mash.wrestler(0);
+        Wrestler *b = clinch_mash.wrestler(1);
+        a->setOpponent(1);
+        b->setOpponent(0);
+        a->changeState(state::GRAPPLE_IDLE, 0, clinch_mash);
+        b->changeState(state::GRAPPLE_IDLE, 0, clinch_mash);
+
+        bool broke_clinch = false;
+        for (int step = 0; step < 150; ++step) {
+            std::vector<InputFrame> neutral_mash(2);
+            if (step % 4 == 0) {
+                neutral_mash[0].btn0 = true;
+                neutral_mash[0].btn0_edge = true;
+            }
+            clinch_mash.update(1.0f / 60.0f, neutral_mash);
+            clinch_mash.clearEvents();
+            if (!a->isInClinch() && !b->isInClinch()) {
+                broke_clinch = true;
+                break;
+            }
+        }
+        check(broke_clinch, "neutral strikes inside a grapple break cleanly without soft-locking");
+
+        // TypeID 12 (WS_Spear / WS_Trouble_In_Paradise / WS_La_Mistica) check.
+        const MoveInfo *spear = nullptr;
+        for (const MoveInfo &m : data.moves()) {
+            if (m.type_id == 12) {
+                spear = &m;
+                break;
+            }
+        }
+        check(spear != nullptr && spear->entry_state == state::USE_RFWS,
+              "TypeID 12 move routes to USE_RFWS");
+        if (spear != nullptr) {
+            Match spear_match;
+            spear_match.configure(&data, ring, 0, 0x9999u);
+            spear_match.addWrestler(data.wrestlerByFolder("04_Edge"), 0,
+                                    ring.centerX() - 50.0f, ring.centerZ(), 1.0f);
+            spear_match.addWrestler(data.wrestlerByFolder("00_John Cena"), 1,
+                                    ring.centerX() + 50.0f, ring.centerZ(), -1.0f);
+            spear_match.setAiControlled(0, false);
+            spear_match.setAiControlled(1, false);
+            spear_match.start();
+            Wrestler *edge = spear_match.wrestler(0);
+            Wrestler *target = spear_match.wrestler(1);
+            edge->setOpponent(1);
+            target->setOpponent(0);
+            edge->beginMove(spear->id);
+            edge->useWrestleStyle(*spear, spear_match);
+            std::vector<InputFrame> idle(2);
+            for (int step = 0; step < 120; ++step) {
+                spear_match.update(1.0f / 60.0f, idle);
+                spear_match.clearEvents();
+            }
+            check(edge->subState() == state::IDLE && target->isDown(),
+                  "WS_Spear completes cleanly and floors the opponent");
+        }
+    }
+
+    // ------------------------------------------------------------------
+    std::printf("[submission tap-out & multi-roster stress]\n");
+    {
+        // Submission give-up must terminate the match cleanly rather than
+        // leaving play_dead == true soft-locked forever.
+        const MoveInfo *sub_move = nullptr;
+        for (const MoveInfo &m : data.moves()) {
+            if (m.entry_state == state::USE_S_WS) {
+                const SubmissionMove *s = data.submissionMove(m.sub_type_id);
+                if (s != nullptr && s->is_give_up) {
+                    sub_move = &m;
+                    break;
+                }
+            }
+        }
+        check(sub_move != nullptr, "a give-up submission move exists");
+        if (sub_move != nullptr) {
+            Match sub_match;
+            sub_match.configure(&data, ring, 0, 0x1212u);
+            sub_match.addWrestler(data.wrestlerByFolder("04_DanielBryan"), 0,
+                                  ring.centerX() - 40.0f, ring.centerZ(), 1.0f);
+            sub_match.addWrestler(data.wrestlerByFolder("02_The Miz"), 1,
+                                  ring.centerX() + 40.0f, ring.centerZ(), -1.0f);
+            sub_match.setAiControlled(0, false);
+            sub_match.setAiControlled(1, false);
+            sub_match.start();
+            Wrestler *holder = sub_match.wrestler(0);
+            Wrestler *trapped = sub_match.wrestler(1);
+            holder->setOpponent(1);
+            trapped->setOpponent(0);
+            trapped->suffocation = 0.85f;
+            holder->beginMove(sub_move->id);
+            holder->useWrestleStyle(*sub_move, sub_match);
+            std::vector<InputFrame> idle(2);
+            for (int step = 0; step < 180 && sub_match.phase() != MatchPhase::Finished; ++step) {
+                sub_match.update(1.0f / 60.0f, idle);
+                sub_match.clearEvents();
+            }
+            check(sub_match.phase() == MatchPhase::Finished && sub_match.winnerTeam() == 0,
+                  "submission give-up finishes the match cleanly");
+        }
+    }
+
+    // ------------------------------------------------------------------
     std::printf("[determinism]\n");
     {
         auto play = [&](std::uint32_t seed) {

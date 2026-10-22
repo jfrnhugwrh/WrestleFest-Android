@@ -109,14 +109,14 @@ void AiEntity::tickWalk(float dt, Match &match, InputFrame *input) {
         return;
     }
 
-    // WalkState: approach until in striking range, then engage.
+    // WalkState: approach into grapple range (100 px, comfortably outside the
+    // 80 px solid body block) so both strikes and clinches are live on arrival.
     const float dx = other->x - self->x;
     const float dz = other->z - self->z;
-    // Strike reach from the state table (PUNCH CollisionRangeX).
-    const StateInfo *punch = match.data().stateInfo(state::PUNCH);
-    const float engage_range = punch != nullptr && punch->collision_range_x > 0.0f
-                                   ? punch->collision_range_x
-                                   : 110.0f;
+    const StateInfo *grapple = match.data().stateInfo(state::GRAPPLE_IDLE);
+    const float engage_range = grapple != nullptr && grapple->collision_range_x > 0.0f
+                                   ? grapple->collision_range_x - 4.0f
+                                   : 96.0f;
     if (std::fabs(dx) > engage_range || std::fabs(dz) > match.common().collision_range_z) {
         stickToward(input, dx, dz * 0.6f);
         // A long gap is closed at a run: holding the red button puts the
@@ -139,31 +139,32 @@ void AiEntity::tickAttackVsOpponent(Match &match, InputFrame *input, int opponen
     switch (opponent_state) {
         case state::IDLE:
         case state::WALK:
+        case state::STAND_TIRED:
+        case state::HITREACT_MID:
+        case state::HITREACT_HIGH:
         case state::GRAPPLE_IDLE:
         case state::GRAPPLE_HIGH:
         case state::GRAPPLE_LOW: {
             // Grappling is how a match is actually won (a punch does 2 damage
-            // against 1.4/s of healing; a throw does 10 and floors him). The
-            // grapple press must be given inside the grapple's own reach -
-            // pressing from punch range (the old behaviour) whiffed every
-            // time, so the old AI jabbed forever, nobody's bar ever drained,
-            // pins never happened and the match ran to the clock.
+            // against 1.4/s of healing; a throw does 10 and floors him). Use the
+            // full StateTable CollisionRangeX (100 px) so the [80..100] window
+            // outside kBodySeparation (80 px) reliably engages clinches!
             const StateInfo *grapple_info = match.data().stateInfo(state::GRAPPLE_IDLE);
             const float grapple_range = grapple_info != nullptr && grapple_info->collision_range_x > 0.0f
-                                            ? grapple_info->collision_range_x * 0.9f
-                                            : 90.0f;
+                                            ? grapple_info->collision_range_x
+                                            : 100.0f;
             const float dx = other->x - self->x;
             const float dz = other->z - self->z;
             const bool grapple_close = std::fabs(dx) <= grapple_range &&
                                        std::fabs(dz) <= match.common().collision_range_z;
-            if (!grapple_close && match.isRumble()) {
-                // In a Rumble only the clinch can win: close the gap, no jabs.
+            const bool wants_grapple = match.isRumble() || match.rng().range(11) < 8;
+            if (wants_grapple && !grapple_close) {
+                // Step inside [80..100] grapple reach instead of throwing a
+                // max-range jab that pushes the target back out of clinch range!
                 stickToward(input, dx, dz);
                 return;
             }
-            const bool grapple = grapple_close &&
-                                 (match.isRumble() || match.rng().range(11) < 8);
-            if (grapple) {
+            if (wants_grapple && grapple_close) {
                 // dx==0 (standing on top of him) still needs a direction or the
                 // press reads as a plain strike - reach the way we're facing.
                 stickDirection(input, dx != 0.0f ? dx : self->facing, dz);
@@ -375,13 +376,10 @@ void AiEntity::tick(float dt, Match &match, InputFrame *input) {
                 tickAttack(dt, match, input);
                 break;
             case AiState::GrappleIdle: {
-                // In the clinch the AI mashes: the exchange itself is resolved
-                // by Match's beat roll.
+                // In the clinch the AI mashes at human thumb cadence while
+                // Match::updateGrappleBeats resolves the throw/reversal roll.
                 tickGrapple(dt, match);
-                if (match.rng().range(2) == 0) {
-                    input->btn0 = true;
-                    input->btn0_edge = true;
-                }
+                emitMash(dt, match, input, false);
                 break;
             }
             case AiState::Dogfight:

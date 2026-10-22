@@ -91,6 +91,7 @@ public:
     bool isDown() const;
     bool isBusy() const;   // in a move/reaction that input must not interrupt
     bool canAct() const;   // in a state that accepts movement input
+    bool isInClinch() const;
     bool isDead() const { return region == region::KNOCKED_OUT; }
     void knockOut(Match &match);
 
@@ -143,6 +144,11 @@ public:
     int move_sub_type = 0;
     bool move_hit_applied = false;
     int score = 0;
+
+    // Anti-soft-lock combo & clinch watchdogs.
+    int neutral_combo_hits = 0;
+    float clinch_timer = 0.0f;
+    int clinch_strikes = 0;
 
     // Counts down while a state owns the clock (reaction beats, anim timers).
     float state_timer = 0.0f;

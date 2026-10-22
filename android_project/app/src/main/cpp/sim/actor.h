@@ -35,6 +35,7 @@ struct InputFrame {
     int dirZ() const { return (down ? 1 : 0) - (up ? 1 : 0); }
     bool anyButton() const { return btn0 || btn1; }
     bool anyButtonEdge() const { return btn0_edge || btn1_edge; }
+    int buttonEdges() const { return (btn0_edge ? 1 : 0) + (btn1_edge ? 1 : 0); }
     void clear() { *this = InputFrame{}; }
 };
 

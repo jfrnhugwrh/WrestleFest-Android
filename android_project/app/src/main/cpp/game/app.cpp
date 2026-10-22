@@ -624,19 +624,23 @@ void GameApp::updateIntro(float dt) {
     switch (intro_stage_) {
         case IntroStage::Entrance:
             intro_stage_ = IntroStage::AnnouncePlayer;
+            match_.setAnnouncerCue(AnnouncerCue::AnnounceLeft);
             intro_stage_length_ = announce(player);
             break;
         case IntroStage::AnnouncePlayer:
             intro_stage_ = IntroStage::AnnounceOpponent;
+            match_.setAnnouncerCue(AnnouncerCue::AnnounceRight);
             intro_stage_length_ = announce(opponent);
             break;
         case IntroStage::AnnounceOpponent:
             intro_stage_ = IntroStage::Fight;
+            match_.setAnnouncerCue(AnnouncerCue::FightExit);
             intro_stage_length_ = 1.1f;
             playCue("audio/sfx/9011_Large_Crowd_F01.wav");
             break;
         case IntroStage::Fight:
             intro_stage_ = IntroStage::Done;
+            match_.setAnnouncerCue(AnnouncerCue::Hidden);
             intro_stage_length_ = 0.0f;
             match_.start();  // the bell
             break;
