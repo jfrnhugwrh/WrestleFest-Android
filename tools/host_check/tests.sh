@@ -33,6 +33,10 @@ $CXX $COMMON -DWRESTLEFEST_DATA_ROOT="\"$ASSETS/data/Data\"" \
     "$SRC"/sim/ai.cpp "$SRC"/sim/referee.cpp "$SRC"/sim/sim_test.cpp -o "$OUT/sim_test"
 "$OUT/sim_test"
 
+echo "== road_test"
+$CXX $COMMON "$SRC"/game/road.cpp "$SRC"/game/road_test.cpp -o "$OUT/road_test"
+"$OUT/road_test"
+
 echo "== image_test"
 ZFLAGS=""
 if [ ! -f /usr/include/zlib.h ]; then

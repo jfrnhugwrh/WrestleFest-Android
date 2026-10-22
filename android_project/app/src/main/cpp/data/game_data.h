@@ -490,6 +490,64 @@ struct ArenaInfo {  // Contents/General/AllArenaTable.sml
     int entrance_scene_id = 0;
 };
 
+// One extra sprite pinned to the entrance stage art: a ramp rail, a pyro
+// column, a light rig. The offsets are in entrance-art pixels and are drawn
+// with the same scale as the stage itself
+// (CGameEntrance::onCreate scales both by GetEntranceGameObjScale).
+struct EntranceAttachObject {
+    std::string file;
+    float offset_x = 0.0f;
+    float offset_y = 0.0f;
+};
+
+struct EntranceSceneInfo {  // Contents/AllEntranceSceneTable.sml
+    int id = 0;
+    std::string folder;                 // "Basic", "Modern Raw", ...
+    std::string scene_file;             // "Entrance scene.png"
+    float max_show_time = 8.0f;         // seconds each wrestler's entrance runs
+    float start_x = -1.0f;              // < 0 -> centre of the stage art
+    float start_z = -1.0f;              // < 0 -> art height - 200
+    float gap = 120.0f;                 // already halved, as SetupWrestler uses it
+    float obj_scale = 1.0f;             // GameObjScale
+    int crowd_id = 0;
+    std::vector<EntranceAttachObject> attach;
+
+    // SetupWrestler's defaults: a negative PositionAndGap entry falls back to a
+    // value derived from the stage art's own size.
+    float resolvedStartX(float art_width) const {
+        return start_x >= 0.0f ? start_x : art_width * 0.5f;
+    }
+    float resolvedStartZ(float art_height) const {
+        return start_z >= 0.0f ? start_z : art_height - 200.0f;
+    }
+    // Two wrestlers of a tag team enter side by side at start_x +/- gap.
+    float resolvedGap() const { return gap; }
+};
+
+// ---------------------------------------------------------------------------
+// Crowd (CCrowd)
+// ---------------------------------------------------------------------------
+// The crowd is a separate system in the original: 15 "people" of palettised
+// sprites (asset_bundles/Sprites/Arena/crowd/pNN.zip, three directions of
+// eight frames each), placed around the arena by an instance table and animated
+// at eight frames a second. The entrance stage draws one of these sets in front
+// of the stage art (CCrowd::Draw(CrowdId)), which is what fills the bottom of
+// the entrance shot.
+struct CrowdInstance {  // AssetInfo/crowd_instanceN.sml
+    int id = 0;
+    float x = 0.0f;    // art-space position, the same space as the stage art
+    float y = 0.0f;
+    int crowd_id = 0;  // 0..14 -> p01..p15
+    int dir = 0;       // 0..2  -> a/b/c
+    int facing = 1;    // -1 draws the sprite mirrored
+    float scale = 1.0f;
+};
+
+struct CrowdSpriteOffset {  // AssetInfo/crowd_sprite_offset.sml
+    float x = 0.0f;  // anchor inside the sprite, like a wrestler's x/y_offset
+    float y = 0.0f;
+};
+
 // ---------------------------------------------------------------------------
 // GameData - owns everything above.
 // ---------------------------------------------------------------------------
@@ -516,6 +574,11 @@ public:
     const AirborneInfo *airborneInfo(int id) const;
     const FallAwayInfo *fallAwayInfo(int id) const;
     const RuleInfo *rule(int id) const;
+    const EntranceSceneInfo *entranceScene(int id) const;
+    // The crowd set for a CrowdId (0..4). Null when its table is not shipped.
+    const std::vector<CrowdInstance> *crowd(int crowd_id) const;
+    // Anchor of one crowd frame, [person][direction][frame].
+    const CrowdSpriteOffset *crowdOffset(int person, int dir, int frame) const;
     const WrestlerProfile *wrestler(int id) const;
     const WrestlerProfile *wrestlerByFolder(const std::string &folder) const;
 
@@ -527,6 +590,7 @@ public:
     const std::vector<WrestlerProfile> &wrestlers() const { return wrestlers_; }
     const std::vector<RuleInfo> &rules() const { return rules_; }
     const std::vector<ArenaInfo> &arenas() const { return arenas_; }
+    const std::vector<EntranceSceneInfo> &entranceScenes() const { return entrance_scenes_; }
 
     const CommonVariables &common() const { return common_; }
     const CommonDamage &damage() const { return damage_; }
@@ -563,6 +627,9 @@ private:
     std::vector<FallAwayInfo> fall_away_;
     std::vector<ButtonCountRow> button_counts_;
     std::vector<RuleInfo> rules_;
+    std::vector<EntranceSceneInfo> entrance_scenes_;
+    std::vector<CrowdInstance> crowds_[5];  // crowd_instance.sml .. crowd_instance5.sml
+    CrowdSpriteOffset crowd_offsets_[15][3][8];
     std::vector<WrestlerProfile> wrestlers_;
     std::vector<ArenaInfo> arenas_;
     CommonVariables common_;

@@ -30,6 +30,7 @@ add_library(wrestlefest_render STATIC
     game/app.cpp
     game/game_renderer.cpp
     game/menu_screens.cpp
+    game/road.cpp
     render/gl_sprite.cpp
     render/image.cpp
     render/zip_reader.cpp
@@ -95,6 +96,10 @@ if(VIEWPORT_BUILD_TESTS)
     target_compile_definitions(data_test PRIVATE
         WRESTLEFEST_DATA_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/../../main/assets/data/Data")
     add_test(NAME data_test COMMAND data_test)
+
+    # The Road to WrestleMania ladder is pure data; guard it on the host too.
+    add_executable(road_test game/road_test.cpp game/road.cpp)
+    add_test(NAME road_test COMMAND road_test)
 
     # PNG / SST decoding against the shipped art.
     # GlSprite needs GLES3 headers, so the decoders are built straight into the

@@ -1,6 +1,7 @@
 #include "game_data.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 
 namespace wrestlefest {
@@ -467,7 +468,133 @@ bool GameData::loadCommonTables(AssetSource *source, const std::string &root, st
             arenas_.push_back(std::move(info));
         }
     }
+
+    // Entrance stages (Contents/AllEntranceSceneTable.sml). One stage per
+    // arena family; CGameEntrance::onCreate picks it from the arena's
+    // EnrtanceSceneId and draws SceneFileName from
+    // graphics/Sprites/Arena/entrance/<FolderName>/.
+    {
+        SmlDocument entrance_doc;
+        std::string entrance_error;
+        if (loadOne(source, root + "/Contents/AllEntranceSceneTable.sml", &entrance_doc,
+                    &entrance_error)) {
+            entrance_scenes_.clear();
+            for (const SmlRecord &record : entrance_doc.records) {
+                EntranceSceneInfo info;
+                info.id = record.integer("Id");
+                info.folder = record.string("FolderName");
+                info.scene_file = record.string("SceneFileName");
+                info.max_show_time = static_cast<float>(record.number("MaxShowTime", 8.0));
+                // F32A3 PositionAndGap: x, z, and the gap a tag partner is
+                // offset by. SetupWrestler halves the gap, so store it halved.
+                info.start_x = static_cast<float>(record.numberAt("PositionAndGap", 0, -1.0));
+                info.start_z = static_cast<float>(record.numberAt("PositionAndGap", 1, -1.0));
+                info.gap = static_cast<float>(record.numberAt("PositionAndGap", 2, 240.0)) * 0.5f;
+                info.obj_scale = static_cast<float>(record.number("GameObjScale", 1.0));
+                info.crowd_id = record.integer("CrowdId");
+                const int attach_count = record.integer("AttachObjCount");
+                for (int i = 0; i < attach_count && i < 8; ++i) {
+                    const std::string name = "AttachObjFileName_" + std::to_string(i + 1);
+                    const std::string offset = "AttachObjOffset_" + std::to_string(i + 1);
+                    EntranceAttachObject object;
+                    object.file = record.string(name.c_str());
+                    if (object.file.empty()) continue;
+                    object.offset_x = static_cast<float>(record.numberAt(offset.c_str(), 0, 0.0));
+                    object.offset_y = static_cast<float>(record.numberAt(offset.c_str(), 1, 0.0));
+                    info.attach.push_back(std::move(object));
+                }
+                entrance_scenes_.push_back(std::move(info));
+            }
+        } else {
+            warnings_.push_back("entrance scene table missing: " + entrance_error);
+        }
+    }
+    // Crowd (CCrowd::Load). Two tables: the instance lists, one per CrowdId,
+    // and the per-frame anchor offsets. Both are optional - without them the
+    // entrance simply draws the stage and the wrestlers on their own.
+    for (int crowd = 0; crowd < 5; ++crowd) {
+        const std::string file = crowd == 0
+                                     ? root + "/AssetInfo/crowd_instance.sml"
+                                     : root + "/AssetInfo/crowd_instance" +
+                                           std::to_string(crowd + 1) + ".sml";
+        SmlDocument crowd_doc;
+        std::string crowd_error;
+        crowds_[crowd].clear();
+        if (!loadOne(source, file, &crowd_doc, &crowd_error)) {
+            warnings_.push_back("crowd instance table missing: " + crowd_error);
+            continue;
+        }
+        for (const SmlRecord &record : crowd_doc.records) {
+            CrowdInstance instance;
+            instance.id = record.integer("id");
+            instance.x = static_cast<float>(record.number("x"));
+            instance.y = static_cast<float>(record.number("y"));
+            instance.crowd_id = record.integer("crowd_id");
+            instance.dir = record.integer("dir");
+            instance.facing = record.integer("facing", 1);
+            instance.scale = static_cast<float>(record.number("scale", 1.0));
+            crowds_[crowd].push_back(instance);
+        }
+    }
+    {
+        std::vector<std::uint8_t> bytes;
+        std::string offset_error;
+        if (source->read(root + "/AssetInfo/crowd_sprite_offset.sml", &bytes)) {
+            // The file nests three arrays (Crowd/Direction/Offset), which the
+            // flat reader cannot walk; the values are in a fixed order of 15
+            // people x 3 directions x 8 frames, so read them positionally.
+            const std::string text(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+            std::vector<CrowdSpriteOffset> flat;
+            std::size_t at = 0;
+            const std::string key = "<F32|x> ";
+            while (flat.size() < 15 * 3 * 8) {
+                const std::size_t hit = text.find(key, at);
+                if (hit == std::string::npos) break;
+                at = hit + key.size();
+                CrowdSpriteOffset offset;
+                offset.x = static_cast<float>(std::atof(text.c_str() + at));
+                flat.push_back(offset);
+            }
+            at = 0;
+            const std::string key_y = "<F32|y> ";
+            std::size_t index = 0;
+            while (index < flat.size()) {
+                const std::size_t hit = text.find(key_y, at);
+                if (hit == std::string::npos) break;
+                at = hit + key_y.size();
+                flat[index].y = static_cast<float>(std::atof(text.c_str() + at));
+                ++index;
+            }
+            if (flat.size() == 15 * 3 * 8) {
+                for (int person = 0; person < 15; ++person) {
+                    for (int dir = 0; dir < 3; ++dir) {
+                        for (int frame = 0; frame < 8; ++frame) {
+                            crowd_offsets_[person][dir][frame] =
+                                flat[static_cast<std::size_t>(person * 24 + dir * 8 + frame)];
+                        }
+                    }
+                }
+            } else {
+                warnings_.push_back("crowd sprite offsets are incomplete");
+            }
+        } else {
+            warnings_.push_back("crowd sprite offset table missing");
+        }
+    }
     return true;
+}
+
+const std::vector<CrowdInstance> *GameData::crowd(int crowd_id) const {
+    if (crowd_id < 0 || crowd_id >= 5) return nullptr;
+    const std::vector<CrowdInstance> &list = crowds_[crowd_id];
+    return list.empty() ? nullptr : &list;
+}
+
+const CrowdSpriteOffset *GameData::crowdOffset(int person, int dir, int frame) const {
+    if (person < 0 || person >= 15 || dir < 0 || dir >= 3 || frame < 0 || frame >= 8) {
+        return nullptr;
+    }
+    return &crowd_offsets_[person][dir][frame];
 }
 
 bool GameData::loadWrestlers(AssetSource *source, const std::string &root, std::string *error) {
@@ -700,6 +827,13 @@ const ForceJump *GameData::forceJump(int id) const { return findById(force_jumps
 const AirborneInfo *GameData::airborneInfo(int id) const { return findById(airborne_, id); }
 const FallAwayInfo *GameData::fallAwayInfo(int id) const { return findById(fall_away_, id); }
 const RuleInfo *GameData::rule(int id) const { return findById(rules_, id); }
+const EntranceSceneInfo *GameData::entranceScene(int id) const {
+    const EntranceSceneInfo *scene = findById(entrance_scenes_, id);
+    // A DLC arena can point at a stage that is not in the base table; fall back
+    // to the first stage so the entrance still plays instead of going black.
+    return scene != nullptr ? scene
+                            : (entrance_scenes_.empty() ? nullptr : &entrance_scenes_.front());
+}
 const WrestlerProfile *GameData::wrestler(int id) const { return findById(wrestlers_, id); }
 
 const WrestlerProfile *GameData::wrestlerByFolder(const std::string &folder) const {

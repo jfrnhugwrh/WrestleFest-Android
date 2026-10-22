@@ -254,15 +254,38 @@ inline float modeStripX(int entry) {
     return (kCanvasWidth - modeStripWidth(entry)) * 0.5f;
 }
 
+// ---------------------------------------------------------------------------
+// Match rules (InGameTable.sml, the `rule_id` argument of Match::configure).
+//
+// These are the table's own IDs - do not renumber them: Match::isRumble() and
+// Match::isTag() test rule_->id against 2 and 1, and the flow layer dispatches
+// on the same value. The mode -> rule mapping below is the only place the two
+// numberings meet.
+// ---------------------------------------------------------------------------
+constexpr int kRuleNone = -1;        // the mode is not playable in this build
+constexpr int kRuleExhibition = 0;   // RULE_1VS1
+constexpr int kRuleTagTeam = 1;      // RULE_2VS2
+constexpr int kRuleRoyalRumble = 2;      // RULE_ROYAL_RUMBLE
+constexpr int kRuleNonElimination = 3;   // RULE_BASIC_NON_ELIMINATION_MATCHES
+constexpr int kRuleElimination = 4;      // RULE_BASIC_ELIMINATION_MATCHES
+// Road to WrestleMania has no single rule: every card on the ladder carries
+// its own (see game/road.h).
+constexpr int kRuleRoadToWrestleMania = -2;
+
 inline int modeGameRule(int entry) {
-    // -1 means "no match rule": the mode is not playable in this build.
     switch (entry) {
-        case 0: return 0;  // Exhibition          -> 1 vs 1
-        case 2: return 2;  // Royal Rumble        -> rumble
-        case 4: return 1;  // Tag Team            -> 2 vs 2
-        default: return -1;
+        case 0: return kRuleExhibition;   // Exhibition   -> 1 VS 1
+        case 1: return kRuleNone;         // Road to WrestleMania (own flow)
+        case 2: return kRuleRoyalRumble;  // Royal Rumble -> six-man rumble
+        case 3: return kRuleNone;         // Saturday Night's Main Event
+        case 4: return kRuleTagTeam;      // Tag Team     -> 2 VS 2
+        default: return kRuleNone;        // Gauntlet Match
     }
 }
+
+// True when the mode has its own screen flow instead of dropping straight into
+// a match (Road to WrestleMania picks a leg of the road first).
+inline bool modeHasOwnFlow(int entry) { return entry == 1; }
 
 // ---------------------------------------------------------------------------
 // Card frames (SuperstarScene::Draw / ArenaScene::Draw).
@@ -427,6 +450,26 @@ inline int arenaCardAt(float x, float y) {
         }
     }
     return -1;
+}
+
+// ---------------------------------------------------------------------------
+// Road to WrestleMania ladder
+// ---------------------------------------------------------------------------
+// StageScene shows one card at a time, centred: the art is 512x336 and sits at
+// x = 224, y = 224 in the original's 960-wide viewport, with the level name
+// above it and the match name below.
+constexpr float kRoadCardX = 224.0f;
+constexpr float kRoadCardY = 150.0f;
+constexpr float kRoadCardWidth = 512.0f;
+constexpr float kRoadCardHeight = 336.0f;
+constexpr float kRoadLevelSize = 54.0f;
+constexpr float kRoadMatchSize = 30.0f;
+constexpr float kRoadMatchInkTop = 510.0f;
+constexpr float kRoadPromptInkTop = 566.0f;
+constexpr float kRoadPromptSize = 26.0f;
+
+inline bool roadCardHit(float x, float y) {
+    return insideRect(x, y, kRoadCardX, kRoadCardY, kRoadCardWidth, kRoadCardHeight);
 }
 
 inline bool backHit(float x, float y) {

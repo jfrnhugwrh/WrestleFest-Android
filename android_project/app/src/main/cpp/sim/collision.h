@@ -11,6 +11,8 @@
 
 #include "tuning.h"
 
+#include <algorithm>
+
 namespace wrestlefest {
 
 // Explicit collision layers so solid hurtboxes never drop out during standing
@@ -41,6 +43,18 @@ struct RingGeometry {
     // Clamps x into the trapezoid at depth z, and z into [top_z, bottom_z].
     float clampX(float z, float x) const;
     float clampZ(float z) const;
+    // Ringside: the strip of floor outside the ropes a wrestler can be thrown
+    // into. clampXArena keeps a man who is on his way out inside the camera's
+    // view instead of letting him slide off the world.
+    float ringsideLeftX(float z) const { return leftX(z) - tuning::kRingsideWidth; }
+    float ringsideRightX(float z) const { return rightX(z) + tuning::kRingsideWidth; }
+    float clampXArena(float z, float x) const {
+        return std::clamp(x, ringsideLeftX(z), ringsideRightX(z));
+    }
+    // True when x is past the ropes by `margin` (the ring's own edge is 0).
+    bool outsideRope(float z, float x, float margin) const {
+        return x < leftX(z) - margin || x > rightX(z) + margin;
+    }
     // True when x is within `margin` of either rope at depth z, used by the
     // 300 px grapple force and the rope-bounce logic.
     bool nearRope(float z, float x, float margin) const;

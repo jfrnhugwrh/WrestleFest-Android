@@ -157,6 +157,24 @@ public:
     // Rope bounce bookkeeping for IRISH_WHIPPED / KNOCKED_BACK.
     bool whip_bounced = false;
 
+    // --- going over the top rope -------------------------------------------
+    // Set by Match::attemptRumbleToss once the toss-out roll succeeds: the
+    // wrestler is on his way over the ropes and slides out to ringside. While
+    // it is set the ring clamp does not hold him (Match::update clamps to the
+    // ringside strip instead) and the reaction states carry him outwards.
+    bool flying_out = false;
+    float fly_dir = 0.0f;  // -1 left, +1 right
+    // Side he went out on, kept for the result screen/HUD after the KO.
+    int eliminated_over_side = 0;
+
+    // Starts the slide over the ropes (`dir` is the side he is thrown to).
+    void startFlyOut(float dir, Match &match);
+    // True while the wrestler may stand outside the trapezoid (he is airborne,
+    // knocked over a rope, or walking back in from ringside).
+    bool canLeaveRing() const;
+    // Distance travelled per second while sliding out over the ropes.
+    float flyOutSpeed(const Match &match) const;
+
 private:
     void tickState(float dt, Match &match, const InputFrame &input);
     void tickLocomotion(float dt, Match &match, const InputFrame &input);
@@ -180,6 +198,8 @@ private:
     void advanceAnimation(float dt);
     // Locomotion/hold states repeat their animation; everything else plays once.
     bool loopsAnimation() const;
+    // Slides a man who is on his way over the top rope out to ringside.
+    void tickFlyOut(float dt, Match &match);
     void applyMoveHit(Match &match);
     void finishMove(Match &match);
     void updatePowerUp(float dt, Match &match, bool can_power_up);

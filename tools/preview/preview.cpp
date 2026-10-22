@@ -13,6 +13,7 @@
 #include "../../android_project/app/src/main/cpp/render/zip_reader.h"
 #include "../../android_project/app/src/main/cpp/sim/match.h"
 #include "../../android_project/app/src/main/cpp/game/menu_layout.h"
+#include "../../android_project/app/src/main/cpp/game/road.h"
 
 #include <algorithm>
 #include <array>
@@ -143,6 +144,24 @@ struct Canvas {
             rgba[i + 1] = g;
             rgba[i + 2] = b;
             rgba[i + 3] = a;
+        }
+    }
+
+    void fillRect(float x, float y, float w, float h, const float color[4]) {
+        const int x0 = std::max(0, static_cast<int>(std::floor(x)));
+        const int y0 = std::max(0, static_cast<int>(std::floor(y)));
+        const int x1 = std::min(kWidth, static_cast<int>(std::ceil(x + w)));
+        const int y1 = std::min(kHeight, static_cast<int>(std::ceil(y + h)));
+        for (int py = y0; py < y1; ++py) {
+            for (int px = x0; px < x1; ++px) {
+                const float sa = color[3];
+                std::uint8_t *dst = &rgba[(static_cast<std::size_t>(py) * kWidth + px) * 4];
+                for (int i = 0; i < 3; ++i) {
+                    dst[i] =
+                        static_cast<std::uint8_t>(color[i] * 255.0f * sa + dst[i] * (1.0f - sa));
+                }
+                dst[3] = 255;
+            }
         }
     }
 
@@ -574,6 +593,43 @@ struct MenuPreview {
         backButton(1.0f);
     }
 
+    // Road to WrestleMania ladder: mirrors MenuScreens::drawRoad.
+    void road(const wrestlefest::road::Progress &progress, int cursor) {
+        backdrop("background_2.png");
+        heading("ROAD TO WRESTLEMANIA", std::array<float, 4>{1.0f, 0.55f, 0.0f, 1.0f}.data());
+        const wrestlefest::road::Level *level = progress.current();
+        const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+        const float orange[4] = {1.0f, 0.55f, 0.0f, 1.0f};
+        if (level == nullptr) {
+            caption("THE ROAD IS COMPLETE", 480.0f, 300.0f, 40.0f, orange);
+            backButton(1.0f);
+            return;
+        }
+        caption(level->name, 480.0f, 90.0f, menu::kRoadLevelSize, white, menu::kHeadingTracking);
+        const int index = std::clamp(cursor, 0, static_cast<int>(level->stages.size()) - 1);
+        const wrestlefest::road::Stage &stage = level->stages[static_cast<std::size_t>(index)];
+        Image art;
+        if (image(std::string("ui/Sprites/UI/stage/") + stage.art + ".png", &art)) {
+            canvas.blit(art.rgba, art.width, art.height, menu::kRoadCardX, menu::kRoadCardY,
+                        menu::kRoadCardWidth, menu::kRoadCardHeight, false);
+        }
+        if (index > progress.stage) {
+            const float dim[4] = {0.02f, 0.02f, 0.04f, 0.6f};
+            canvas.fillRect(menu::kRoadCardX, menu::kRoadCardY, menu::kRoadCardWidth,
+                            menu::kRoadCardHeight, dim);
+        }
+        arrows(index, static_cast<int>(level->stages.size()));
+        const std::string title = "MATCH " + std::to_string(index + 1) + " / " +
+                                  std::to_string(level->stages.size()) + "  -  " + stage.label;
+        caption(title, 480.0f, menu::kRoadMatchInkTop, menu::kRoadMatchSize, white,
+                menu::kLabelTracking);
+        caption(index <= progress.stage ? "TAP THE CARD TO WRESTLE IT"
+                                        : "WIN THE EARLIER MATCHES FIRST",
+                480.0f, menu::kRoadPromptInkTop, menu::kRoadPromptSize, white);
+        dots(index, static_cast<int>(level->stages.size()));
+        backButton(1.0f);
+    }
+
     void arenaPage(const GameData &data, int page, int selected, int page_count) {
         backdrop("background_2.png");
         heading("SELECT ARENA", std::array<float, 4>{1.0f, 0.55f, 0.0f, 1.0f}.data());
@@ -648,6 +704,13 @@ int main(int argc, char **argv) {
     std::string arena_folder = "ARENA02";
     std::string screen;
     std::string scene;
+    // --entrance=<AllEntranceSceneTable id> composites the entrance cutscene.
+    std::vector<int> crowd_frames;  // the crowd's animation phase, per instance
+    // --road-level=N / --road-stage=N place the Road ladder's cursor.
+    wrestlefest::road::Progress road_progress;
+    bool entrance_screen = false;
+    int entrance_scene_id = 0;
+    int entrance_show_time = 90;  // sim steps of the entrance to play out
     int menu_page = 0;
     int menu_selected = 0;
     std::vector<std::string> wrestler_folders;
@@ -663,6 +726,15 @@ int main(int argc, char **argv) {
             menu_page = std::atoi(arg.substr(7).c_str());
         } else if (arg.rfind("--selected=", 0) == 0) {
             menu_selected = std::atoi(arg.substr(11).c_str());
+        } else if (arg.rfind("--road-level=", 0) == 0) {
+            road_progress.level = std::atoi(arg.substr(13).c_str());
+        } else if (arg.rfind("--road-stage=", 0) == 0) {
+            road_progress.stage = std::atoi(arg.substr(13).c_str());
+        } else if (arg.rfind("--entrance=", 0) == 0) {
+            entrance_screen = true;
+            entrance_scene_id = std::atoi(arg.substr(11).c_str());
+        } else if (arg.rfind("--entrance-time=", 0) == 0) {
+            entrance_show_time = std::atoi(arg.substr(16).c_str());
         } else {
             wrestler_folders.push_back(arg);
         }
@@ -697,6 +769,8 @@ int main(int argc, char **argv) {
                 const int pages = std::max(1, (static_cast<int>(menu_data.wrestlers().size()) + 7) / 8);
                 menu_preview.superstarPage(menu_data, std::min(menu_page, pages - 1),
                                            menu_selected, pages);
+            } else if (screen == "road") {
+                menu_preview.road(road_progress, menu_selected);
             } else if (screen == "arena") {
                 const int pages = std::max(1, (static_cast<int>(menu_data.arenas().size()) + 3) / 4);
                 menu_preview.arenaPage(menu_data, std::min(menu_page, pages - 1), menu_selected,
@@ -841,7 +915,7 @@ int main(int argc, char **argv) {
         anndoc.parse(reinterpret_cast<const char *>(annbytes.data()), annbytes.size(), &error);
 
     auto drawWrestlerFrame = [&](const WrestlerProfile *profile, int sst_id, float wx, float wz,
-                                 float wfacing) {
+                                 float wfacing, float scale = kArtScale) {
         if (profile == nullptr) return;
         const SpriteEntry *sprite = profile->spriteFor(sst_id);
         if (sprite == nullptr) return;
@@ -864,14 +938,214 @@ int main(int argc, char **argv) {
             canvas.blit(shadow_img.rgba, shadow_img.width, shadow_img.height, wx - sw * 0.5f,
                         wz - sh * 0.62f, sw, sh, false, 0.55f);
         }
-        const float width = decoded.width * kArtScale;
-        const float height = decoded.height * kArtScale;
-        const float left = wfacing >= 0.0f
-                               ? wx - sprite->x_offset * kArtScale
-                               : wx - (decoded.width - sprite->x_offset) * kArtScale;
-        const float top = wz - sprite->y_offset * kArtScale;
+        const float width = decoded.width * scale;
+        const float height = decoded.height * scale;
+        const float left = wfacing >= 0.0f ? wx - sprite->x_offset * scale
+                                           : wx - (decoded.width - sprite->x_offset) * scale;
+        const float top = wz - sprite->y_offset * scale;
         canvas.blit(rgba, decoded.width, decoded.height, left, top, width, height, wfacing < 0.0f);
     };
+
+    // ---- Entrance cutscene (CGameEntrance::onDraw) ------------------------
+    // The stage art is 1482x711 like the ring art, so it is placed the same way;
+    // the arena's own crowd sheet fills the canvas under it and the men walk out
+    // on the show's depth line. See GameRenderer::entranceFor / drawEntrance.
+    if (entrance_screen) {
+        const EntranceSceneInfo *info = data.entranceScene(entrance_scene_id);
+        if (info == nullptr) {
+            std::printf("no entrance scene %d\n", entrance_scene_id);
+            return 1;
+        }
+        const std::string folder =
+            assets + "/graphics/Sprites/Arena/entrance/" + info->folder + "/";
+
+        Canvas ec;
+        ec.fill(4, 4, 6, 255);
+        bytes.clear();
+        if (readFile(assets + "/graphics/Sprites/Arena/" + arena_folder + "/ground.png", &bytes) &&
+            decodePng(bytes.data(), bytes.size(), &crowd)) {
+            ec.blit(crowd.rgba, crowd.width, crowd.height, kOriginX,
+                    640.0f - crowd.height * kArtScale, crowd.width * kArtScale,
+                    crowd.height * kArtScale, false);
+        }
+        Image stage_art;
+        bytes.clear();
+        if (!readFile(folder + info->scene_file, &bytes) ||
+            !decodePng(bytes.data(), bytes.size(), &stage_art)) {
+            std::printf("cannot read %s%s\n", folder.c_str(), info->scene_file.c_str());
+            return 1;
+        }
+        const float art_w = static_cast<float>(stage_art.width);
+        const float art_h = static_cast<float>(stage_art.height);
+        const float origin_x = 480.0f - art_w * 0.5f * kArtScale;
+        const float origin_y = 0.0f;
+        ec.blit(stage_art.rgba, stage_art.width, stage_art.height, origin_x, origin_y,
+                art_w * kArtScale, art_h * kArtScale, false);
+        for (const EntranceAttachObject &object : info->attach) {
+            Image piece;
+            bytes.clear();
+            if (!readFile(folder + object.file, &bytes) ||
+                !decodePng(bytes.data(), bytes.size(), &piece)) {
+                continue;
+            }
+            ec.blit(piece.rgba, piece.width, piece.height, origin_x + object.offset_x * kArtScale,
+                    origin_y + object.offset_y * kArtScale, piece.width * kArtScale,
+                    piece.height * kArtScale, false);
+        }
+
+        // The crowd, drawn in front of the stage art (CCrowd::Draw(CrowdId)).
+        {
+            const std::vector<CrowdInstance> *crowd = data.crowd(info->crowd_id);
+            if (crowd != nullptr) {
+                struct CrowdZip {
+                    std::vector<std::uint8_t> bytes;
+                    ZipArchive archive;
+                    bool ok = false;
+                };
+                static std::unordered_map<int, CrowdZip> zips;
+                std::vector<int> &frames = crowd_frames;
+                if (frames.size() != crowd->size()) {
+                    frames.resize(crowd->size());
+                    for (std::size_t i = 0; i < frames.size(); ++i) {
+                        frames[i] = static_cast<int>(i) & 7;
+                    }
+                }
+                // Instances are drawn back to front.
+                std::vector<std::size_t> order(crowd->size());
+                for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+                std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+                    return (*crowd)[a].y < (*crowd)[b].y;
+                });
+                for (std::size_t slot : order) {
+                    const CrowdInstance &ci = (*crowd)[slot];
+                    CrowdZip &zip = zips[ci.crowd_id];
+                    if (!zip.ok) {
+                        char zname[32];
+                        std::snprintf(zname, sizeof(zname), "p%02d.zip", ci.crowd_id + 1);
+                        zip.ok = readFile(assets +
+                                              "/asset_bundles/Sprites/Arena/crowd/" + zname,
+                                          &zip.bytes) &&
+                                 zip.archive.open(zip.bytes.data(), zip.bytes.size());
+                    }
+                    if (!zip.ok) continue;
+                    char fname[48];
+                    std::snprintf(fname, sizeof(fname), "ph_P%02d%c_%02d.sst", ci.crowd_id + 1,
+                                  static_cast<char>('a' + ci.dir), frames[slot] + 1);
+                    std::vector<std::uint8_t> sst_bytes;
+                    SstSprite decoded;
+                    std::vector<std::uint8_t> rgba;
+                    if (!zip.archive.read(fname, &sst_bytes) ||
+                        !decodeSst(sst_bytes.data(), sst_bytes.size(), &decoded)) {
+                        continue;
+                    }
+                    expandSst(decoded, &rgba);
+                    const CrowdSpriteOffset *offset =
+                        data.crowdOffset(ci.crowd_id, ci.dir, frames[slot]);
+                    const float ax = (offset != nullptr ? offset->x : 0.0f) * kArtScale * ci.scale;
+                    const float ay = (offset != nullptr ? offset->y : 0.0f) * kArtScale * ci.scale;
+                    const float w = decoded.width * kArtScale * ci.scale;
+                    const float h = decoded.height * kArtScale * ci.scale;
+                    const float left = origin_x + ci.x * kArtScale -
+                                       (ci.facing < 1 ? w - ax : ax);
+                    ec.blit(rgba, decoded.width, decoded.height, left,
+                            origin_y + ci.y * kArtScale - ay, w, h, ci.facing < 1);
+                }
+            }
+        }
+
+        // The wrestlers, playing their own entrance animations on the stage.
+        const RingGeometry ering;
+        Match ematch;
+        ematch.configure(&data, ering, 0, 0x5150u);
+        ematch.allowAutoStart(false);
+        const std::string f0 = wrestler_folders.size() > 0 ? wrestler_folders[0] : "00_John Cena";
+        const std::string f1 = wrestler_folders.size() > 1 ? wrestler_folders[1] : "03_BigShow";
+        const bool tag = wrestler_folders.size() > 3;
+        const float start_x = info->resolvedStartX(art_w);
+        const float start_z = info->resolvedStartZ(art_h);
+        const float gap = info->resolvedGap();
+        ematch.addWrestler(data.wrestlerByFolder(f0), 0, ering.centerX(), ering.centerZ(), 1.0f);
+        ematch.addWrestler(data.wrestlerByFolder(f1), 1, ering.centerX(), ering.centerZ(), 1.0f);
+        if (tag) {
+            ematch.addWrestler(data.wrestlerByFolder(wrestler_folders[2]), 0, ering.centerX(),
+                               ering.centerZ(), 1.0f);
+            ematch.addWrestler(data.wrestlerByFolder(wrestler_folders[3]), 1, ering.centerX(),
+                               ering.centerZ(), 1.0f);
+        }
+        for (int i = 0; i < ematch.wrestlerCount(); ++i) ematch.setAiControlled(i, false);
+        ematch.playEntrance();
+        std::vector<InputFrame> einputs(static_cast<std::size_t>(ematch.wrestlerCount()));
+        for (int step = 0; step < entrance_show_time; ++step) {
+            ematch.update(1.0f / 60.0f, einputs);
+        }
+
+        const float feet_y = origin_y + start_z * kArtScale;
+        const float actor_scale = kArtScale * (info->obj_scale > 0.0f ? info->obj_scale : 1.0f);
+        auto putOnStage = [&](int index, float art_x) {
+            const Wrestler *w = ematch.wrestler(index);
+            if (w == nullptr || w->profile() == nullptr) return;
+            drawWrestlerFrame(w->profile(), w->spriteId(), origin_x + art_x * kArtScale, feet_y,
+                              1.0f, actor_scale);
+        };
+        Canvas *saved = nullptr;
+        (void)saved;
+        // drawWrestlerFrame targets `canvas`; swap the buffers round it.
+        std::swap(canvas.rgba, ec.rgba);
+        putOnStage(0, tag ? start_x - gap : start_x);
+        putOnStage(1, tag ? start_x + gap : start_x);
+        if (tag) {
+            putOnStage(2, start_x - gap * 3.0f);
+            putOnStage(3, start_x + gap * 3.0f);
+        }
+        std::swap(canvas.rgba, ec.rgba);
+
+        // The name plate: the rule, the WWE mark, and the names in yellow.
+        {
+            const float rule_y = 640.0f - 50.0f;
+            const float rule_w = 960.0f * 0.82f;
+            const float black[4] = {0.02f, 0.02f, 0.02f, 0.9f};
+            const float red[4] = {0.76f, 0.08f, 0.03f, 1.0f};
+            ec.fillRect(52.0f, rule_y + 2.0f, rule_w, 5.0f, black);
+            ec.fillRect(50.0f, rule_y, rule_w, 5.0f, red);
+            Image logo;
+            bytes.clear();
+            if (readFile(assets + "/ui/Sprites/UI/title_menu/wwe_logo_for_shop.png", &bytes) &&
+                decodePng(bytes.data(), bytes.size(), &logo)) {
+                const float lw = logo.width * 1.2f;
+                const float lh = logo.height * 1.2f;
+                ec.blit(logo.rgba, logo.width, logo.height, rule_w + 50.0f - lw * 0.25f,
+                        rule_y - logo.height * 0.9f, lw, lh, false);
+            }
+            Font efont;
+            if (efont.load(assets, "Century Gothic")) {
+                const float tint[4] = {1.0f, 0.85f, 0.1f, 1.0f};
+                const float shadow[4] = {0.0f, 0.0f, 0.0f, 0.8f};
+                const float scale = 40.0f /
+                                    (efont.metrics.cell_height > 0.0f
+                                         ? efont.metrics.cell_height
+                                         : 24.0f);
+                auto line = [&](const std::string &text, float ink_top) {
+                    if (text.empty()) return;
+                    efont.draw(ec, 49.0f, ink_top + 1.0f, scale, text, shadow);
+                    efont.draw(ec, 50.0f, ink_top, scale, text, tint);
+                };
+                const Wrestler *w = ematch.wrestler(0);
+                const Wrestler *p = tag ? ematch.wrestler(2) : nullptr;
+                line(p != nullptr && p->profile() != nullptr ? p->profile()->name : std::string(),
+                     640.0f - 150.0f);
+                line(w != nullptr && w->profile() != nullptr ? w->profile()->name : std::string(),
+                     640.0f - 100.0f);
+            }
+        }
+
+        if (!writePng(out, ec.rgba)) {
+            std::printf("cannot write %s\n", out.c_str());
+            return 1;
+        }
+        std::printf("wrote %s (entrance %d: %s)\n", out.c_str(), entrance_scene_id,
+                    info->folder.c_str());
+        return 0;
+    }
 
     auto drawOfficialFrame = [&](const SmlDocument &doc, const std::string &dir, int row, float ox,
                                  float oz, float ofacing, float alpha) {

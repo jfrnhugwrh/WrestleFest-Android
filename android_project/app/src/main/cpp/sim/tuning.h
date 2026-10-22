@@ -13,7 +13,26 @@ namespace tuning {
 // Reaction beats are "base - perStrength * (strength - 1)". At strength 1 they
 // are the base; at strength 11 a wrestler reacts ~4x faster (0.30 s -> 0.07 s).
 constexpr float kGrappleMashStep = 0.08f;           // a press brings the next beat forward
-constexpr float kRumbleTossRange = 150.0f;           // toss-outs only at the ropes
+// A Rumble elimination only happens at the ropes: the man has to be within
+// this many pixels of one (about a quarter of the ring's width - a throw
+// carries him the rest of the way) and be driven into it for the toss to be on.
+constexpr float kRumbleTossRange = 140.0f;
+// In a Rumble the AI lines up on the side of its victim that faces the middle
+// of the ring, so its throws drive him outwards. This is how far short of the
+// grapple's reach it stands (a fraction of the grapple range).
+constexpr float kRumbleHerdOffset = 0.75f;
+
+// --- Ring exit / Royal Rumble elimination -------------------------------------
+// A wrestler who is knocked towards a rope can be sent over the top rope. He
+// then slides out to ringside; `kRingsideWidth` is how far past the rope he
+// lands, `kFlyOutSpeed` the speed of the slide (a fraction of the shipped
+// AirborneFactorX 550, the same number the Irish whip uses).
+constexpr float kRingsideWidth = 120.0f;
+constexpr float kFlyOutSpeedFactor = 0.75f;
+// How far past the rope a wrestler has to be before he counts as "outside"
+// (region::OUTSIDE): the ropes themselves are not enough, he has to be down on
+// the floor. Used for the outside count in the pinning rules.
+constexpr float kOutsideLineWidth = 45.0f;
 constexpr float kAiRunRange = 260.0f;               // AI sprints to close a gap this big
 constexpr float kTagReach = 70.0f;                  // how close the corner must be to tag
 constexpr float kTagEnergyFraction = 0.35f;         // AI tags out below this energy

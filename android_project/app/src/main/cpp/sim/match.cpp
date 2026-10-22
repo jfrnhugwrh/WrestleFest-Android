@@ -45,6 +45,7 @@ void Match::configure(const GameData *data, const RingGeometry &ring, int rule_i
     intro_timer_ = 0.0f;
     winner_team_ = -1;
     loser_team_ = -1;
+    eliminations_ = 0;
     outside_count_ = 0;
     outside_timer_ = 0.0f;
     outside_warned_ = false;
@@ -86,6 +87,19 @@ void Match::playEntrance() {
         w.changeState(state::ENTRANCE, 0, *this);
     }
     emit({EventType::Announcer, -1, -1, 0.0f, state::ENTRANCE});
+}
+
+void Match::endEntrance() {
+    if (phase_ != MatchPhase::Intro) return;
+    parkLateEntrants();
+    setupTagTeams();
+    entry_timer_ = 0.0f;
+    for (std::size_t i = 0; i < wrestlers_.size(); ++i) {
+        Wrestler &w = wrestlers_[i];
+        if (isWaitingEntrant(static_cast<int>(i))) continue;
+        w.changeState(state::IDLE, 0, *this);
+    }
+    resolveBodySeparation();
 }
 
 void Match::start() {
@@ -162,6 +176,125 @@ Wrestler *Match::wrestler(int index) {
 const Wrestler *Match::wrestler(int index) const {
     if (index < 0 || index >= static_cast<int>(wrestlers_.size())) return nullptr;
     return &wrestlers_[static_cast<std::size_t>(index)];
+}
+
+// ---------------------------------------------------------------------------
+// Royal Rumble elimination
+// ---------------------------------------------------------------------------
+int Match::tossOutSide(const Wrestler &victim, const Wrestler *attacker) {
+    if (!isRumble() || rule_ == nullptr || data_ == nullptr) return 0;
+    if (victim.isDead() || attacker == nullptr || attacker->isDead()) return 0;
+
+    // UseToseOutAreaWidth (CommonVariableInfo, 50): how far past the rope a man
+    // has to be before he counts as being on his way out.
+    const float margin = data_->common().use_toss_out_area_width;
+    int side = 0;
+    if (victim.x < ring_.leftX(victim.z) + margin) {
+        side = 1;
+    } else if (victim.x > ring_.rightX(victim.z) - margin) {
+        side = 2;
+    } else {
+        return 0;
+    }
+
+    float chance = rule_->toss_out_percentage;
+    const int dynamic_by = rule_->toss_out_dynamic_by;
+    if (dynamic_by == 1 || dynamic_by == 2) {
+        const float ratio = dynamic_by == 1
+                                ? attacker->energyFraction()
+                                : (attacker->motion_power_max > 0.0f
+                                       ? attacker->motion_power / attacker->motion_power_max
+                                       : 1.0f);
+        const float spent = 1.0f - std::clamp(ratio, 0.0f, 1.0f);
+        chance += (100.0f - chance) * spent;
+    }
+    if (chance < 100.0f) {
+        const int roll = rng_.range(101);
+        if (chance < static_cast<float>(roll)) return 0;
+    }
+    return side;
+}
+
+bool Match::attemptRumbleToss(Wrestler &attacker, Wrestler &victim, float dir) {
+    if (!isRumble() || phase_ != MatchPhase::Running) return false;
+    if (victim.isDead() || victim.flying_out || !victim.active) return false;
+    if (dir == 0.0f || attacker.isDead()) return false;
+    // The throw has to be taking him towards a rope, and he has to be close
+    // enough to it for the toss to be on (tuning::kRumbleTossRange).
+    if (!ring_.nearRope(victim.z, victim.x, tuning::kRumbleTossRange)) return false;
+    const float outward = dir >= 0.0f ? 1.0f : -1.0f;
+    const bool towards_rope =
+        outward > 0.0f ? victim.x >= ring_.rightX(victim.z) - tuning::kRumbleTossRange
+                       : victim.x <= ring_.leftX(victim.z) + tuning::kRumbleTossRange;
+    if (!towards_rope) return false;
+
+    // canTossOpponentOutOfRing is tested on the man as he clears the ropes, so
+    // measure where the throw is putting him, not where he is standing now.
+    const float thrown_x = victim.x + outward * data_->common().use_toss_out_area_width * 2.0f;
+    const float saved_x = victim.x;
+    victim.x = thrown_x;
+    const int side = tossOutSide(victim, &attacker);
+    victim.x = saved_x;
+    if (side == 0) return false;
+    // IsFlyOut: the throw has to be going the same way the man is going out.
+    if (outward < 0.0f && side != 1) return false;
+    if (outward > 0.0f && side != 2) return false;
+
+    victim.startFlyOut(outward, *this);
+    emit({EventType::GrappleWon, attacker.id(), victim.id(), static_cast<float>(side),
+          victim.subState()});
+    return true;
+}
+
+void Match::eliminateOverRope(Wrestler &winner, Wrestler &victim, int side) {
+    if (victim.isDead()) return;
+    const int loser_id = victim.id();
+    const int winner_id = winner.id();
+    victim.flying_out = false;
+    victim.eliminated_over_side = side;
+    ++eliminations_;
+    // CRoyalRumbleController::FallOut: he is out of the match the moment he
+    // clears the ropes - no pin, no count, no getting back up.
+    victim.knockOut(*this);
+    emit({EventType::KnockedOut, loser_id, winner_id, static_cast<float>(side), state::LOSE});
+}
+
+void Match::updateRumbleTossOuts() {
+    if (!isRumble() || phase_ != MatchPhase::Running || data_ == nullptr) return;
+    const float margin = data_->common().use_toss_out_area_width;
+    for (int i = 0; i < wrestlerCount(); ++i) {
+        Wrestler *w = wrestler(i);
+        if (w == nullptr || w->isDead() || !w->active) continue;
+        if (!w->flying_out && !ring_.outsideRope(w->z, w->x, margin)) continue;
+        // He is only gone once he has actually cleared the ropes: the slide
+        // over the top is what the player has to see.
+        if (!ring_.outsideRope(w->z, w->x, 2.0f)) continue;
+
+        Wrestler *attacker = wrestler(w->opponentId());
+        const int side = w->x < ring_.centerX() ? 1 : 2;
+        if (attacker == nullptr || attacker->isDead() || attacker == w) {
+            // Nobody is credited: he went out on his own (a missed charge, a
+            // rope bounce). He is still eliminated - that is the Rumble rule.
+            if (w->flying_out || ring_.outsideRope(w->z, w->x, margin)) {
+                w->flying_out = false;
+                w->eliminated_over_side = side;
+                ++eliminations_;
+                w->knockOut(*this);
+                emit({EventType::KnockedOut, w->id(), -1, static_cast<float>(side), state::LOSE});
+            }
+            continue;
+        }
+        if (!w->flying_out) {
+            // Reached ringside without a decided throw (a whip that carried him
+            // all the way): settle it with the same roll now.
+            const int rolled = tossOutSide(*w, attacker);
+            if (rolled == 0) {
+                w->x = ring_.clampX(w->z, w->x);
+                continue;
+            }
+        }
+        eliminateOverRope(*attacker, *w, side);
+    }
 }
 
 int Match::winnerIndex() const {
@@ -270,7 +403,13 @@ void Match::update(float dt, const std::vector<InputFrame> &inputs) {
         w->tick(dt, *this, input);
         if (w->region == region::IN_RING || w->region == region::IN_RING_ALONE) {
             w->z = ring_.clampZ(w->z);
-            w->x = ring_.clampX(w->z, w->x);
+            // The ropes only hold a man who is on his feet: a body that has
+            // been thrown at them goes over the top and down to ringside.
+            if (w->flying_out || w->canLeaveRing()) {
+                w->x = ring_.clampXArena(w->z, w->x);
+            } else {
+                w->x = ring_.clampX(w->z, w->x);
+            }
         }
     }
 
@@ -297,6 +436,7 @@ void Match::update(float dt, const std::vector<InputFrame> &inputs) {
         updateGrappleBeats(dt);
         resolveCollisions();
         resolveBodySeparation();
+        updateRumbleTossOuts();
         updateRegions();
     }
 
@@ -428,14 +568,14 @@ void Match::updateGrappleBeats(float dt) {
 
         Wrestler *beat_winner = win ? w : other;
         Wrestler *beat_loser = win ? other : w;
-        if (isRumble() && rule_ != nullptr) {
-            const float toss_roll = static_cast<float>(rng_.range(1000)) * 0.1f;
-            if (toss_roll < rule_->toss_out_percentage &&
-                ring_.nearRope(beat_loser->z, beat_loser->x, tuning::kRumbleTossRange)) {
-                const int loser_id = beat_loser->id();
-                const int winner_id = beat_winner->id();
-                beat_loser->knockOut(*this);
-                emit({EventType::KnockedOut, loser_id, winner_id, toss_roll, state::LOSE});
+        if (isRumble()) {
+            // The man who lost the clinch is hurled at the nearest rope; over
+            // the top he goes if the toss roll comes up (canTossOpponentOut
+            // OfRing + IsFlyOut). attemptRumbleToss owns the state change.
+            const float dir = beat_loser->x >= ring_.centerX() ? 1.0f : -1.0f;
+            if (attemptRumbleToss(*beat_winner, *beat_loser, dir)) {
+                emit({EventType::GrappleWon, beat_winner->id(), beat_loser->id(), dir,
+                      beat_loser->subState()});
                 continue;
             }
         }
@@ -573,8 +713,19 @@ void Match::resolveBodySeparation() {
 
 void Match::updateRegions() {
     bool anyone_outside = false;
-    for (Wrestler &w : wrestlers_) {
-        if (w.region == region::OUTSIDE) anyone_outside = true;
+    for (int i = 0; i < wrestlerCount(); ++i) {
+        Wrestler &w = wrestlers_[static_cast<std::size_t>(i)];
+        // A knocked-out man, a tag partner on the apron and an entrant who has
+        // not walked in yet are never counted out.
+        if (w.isDead() || isOnApron(i) || isWaitingEntrant(i)) continue;
+        if (w.region == region::RINGSIDE) continue;
+        if (ring_.outsideRope(w.z, w.x, tuning::kOutsideLineWidth)) {
+            w.region = region::OUTSIDE;
+            anyone_outside = true;
+        } else if (w.region == region::OUTSIDE) {
+            // Back between the ropes: the referee's count starts again.
+            w.region = region::IN_RING;
+        }
     }
     if (anyone_outside) {
         outside_timer_ += tuning::kFixedDelta;
@@ -598,6 +749,10 @@ void Match::checkExhausted() {
         Wrestler *w = wrestler(i);
         if (w == nullptr || w->isDead() || isOnApron(i) || isWaitingEntrant(i)) continue;
         if (w->energy > 0.0f) continue;
+        // In a Rumble an empty bar only ends a man's night once he is down: a
+        // spent wrestler who is still on his feet can be thrown over the top
+        // rope, which is the way the match is meant to be decided.
+        if (isRumble() && !w->isDown() && w->canAct()) continue;
         w->knockOut(*this);
     }
 }
@@ -619,6 +774,35 @@ void Match::checkWinConditions(float dt) {
             finish(winner >= 0 ? wrestler(winner)->team : 0);
         }
         return;
+    }
+
+    // Multi-man cards (the Road's Triple Threat and Fatal 4 Way give every man
+    // his own team): the last side standing takes it. Two-sided matches fall
+    // through to the pinfall and team-wipe tests below.
+    {
+        int sides = 0;
+        int alive_sides = 0;
+        int alive_team = -1;
+        for (int team = 0; team < 8; ++team) {
+            bool present = false;
+            bool alive = false;
+            for (const Wrestler &w : wrestlers_) {
+                if (w.team != team) continue;
+                present = true;
+                if (!w.isDead()) alive = true;
+            }
+            if (!present) continue;
+            ++sides;
+            if (alive) {
+                ++alive_sides;
+                alive_team = team;
+            }
+        }
+        if (sides > 2 && alive_sides <= 1) {
+            finish(alive_team >= 0 ? alive_team : 0);
+            return;
+        }
+        if (sides > 2) return;  // a multi-man card is not decided by pins yet
     }
 
     // 1. Pinfall: awarded strictly once the referee has arrived at the cover,
@@ -649,8 +833,15 @@ void Match::checkWinConditions(float dt) {
         }
     }
 
-    // 3. Count-out.
+    // 3. Count-out: the referee reaches MaxOutsideCount and the man on the
+    //    floor has lost (the original calls it there and then).
     if (outside_count_ >= (rule_ != nullptr ? rule_->max_outside_count : 20)) {
+        for (int i = 0; i < wrestlerCount(); ++i) {
+            const Wrestler *w = wrestler(i);
+            if (w == nullptr || w->isDead() || w->region != region::OUTSIDE) continue;
+            finish(w->team == 0 ? 1 : 0);
+            return;
+        }
         outside_count_ = 0;
     }
 

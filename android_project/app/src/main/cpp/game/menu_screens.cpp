@@ -357,6 +357,65 @@ void MenuScreens::drawArenaPage(int page, int selected, int page_count) {
     drawBackButton(1.0f);
 }
 
+void MenuScreens::drawRoad(const road::Progress &progress, int cursor, const std::string &result) {
+    SpriteBatch &batch = renderer_->batch();
+    drawBackdrop(renderer_->uiBackground2());
+    drawHeading("ROAD TO WRESTLEMANIA", menu::titleOrange());
+
+    const road::Level *level = progress.current();
+    if (level == nullptr) {
+        drawCaption("THE ROAD IS COMPLETE", menu::kCanvasWidth * 0.5f, 300.0f, 40.0f,
+                    menu::titleOrange());
+        drawBackButton(1.0f);
+        return;
+    }
+
+    // The level's name, then the card the cursor is on.
+    drawCaption(level->name, menu::kCanvasWidth * 0.5f, 90.0f, menu::kRoadLevelSize,
+                menu::normalText(), menu::kHeadingTracking);
+
+    const int index = std::clamp(cursor, 0, static_cast<int>(level->stages.size()) - 1);
+    const road::Stage &stage = level->stages[static_cast<std::size_t>(index)];
+    const Texture &art = renderer_->roadStageArt(stage.art);
+    if (art.valid()) {
+        batch.draw(art, menu::kRoadCardX, menu::kRoadCardY, menu::kRoadCardWidth,
+                   menu::kRoadCardHeight, Color{});
+    } else {
+        batch.draw(renderer_->white(), menu::kRoadCardX, menu::kRoadCardY, menu::kRoadCardWidth,
+                   menu::kRoadCardHeight, Color{0.18f, 0.2f, 0.28f, 1.0f});
+    }
+
+    // A card the run has not reached yet is dimmed and cannot be played.
+    if (index > progress.stage) {
+        batch.draw(renderer_->white(), menu::kRoadCardX, menu::kRoadCardY, menu::kRoadCardWidth,
+                   menu::kRoadCardHeight, Color{0.02f, 0.02f, 0.04f, 0.6f});
+    } else if (index < progress.stage) {
+        drawCaption("CLEARED", menu::kRoadCardX + menu::kRoadCardWidth * 0.5f,
+                    menu::kRoadCardY + 24.0f, menu::kRoadPromptSize, menu::titleOrange());
+    }
+
+    drawArrows(index, static_cast<int>(level->stages.size()));
+
+    std::string title = "MATCH " + std::to_string(index + 1) + " / " +
+                        std::to_string(level->stages.size()) + "  -  " + stage.label;
+    drawCaption(title, menu::kCanvasWidth * 0.5f, menu::kRoadMatchInkTop, menu::kRoadMatchSize,
+                menu::normalText(), menu::kLabelTracking);
+
+    if (!result.empty()) {
+        drawCaption(result, menu::kCanvasWidth * 0.5f, menu::kRoadPromptInkTop,
+                    menu::kRoadPromptSize, menu::titleOrange());
+    } else if (index <= progress.stage) {
+        drawCaption("TAP THE CARD TO WRESTLE IT", menu::kCanvasWidth * 0.5f,
+                    menu::kRoadPromptInkTop, menu::kRoadPromptSize, menu::normalText());
+    } else {
+        drawCaption("WIN THE EARLIER MATCHES FIRST", menu::kCanvasWidth * 0.5f,
+                    menu::kRoadPromptInkTop, menu::kRoadPromptSize, menu::normalText());
+    }
+
+    drawDots(index, static_cast<int>(level->stages.size()));
+    drawBackButton(1.0f);
+}
+
 void MenuScreens::drawNotice(const std::string &text, float alpha) {
     if (alpha <= 0.0f) return;
     SpriteBatch &batch = renderer_->batch();

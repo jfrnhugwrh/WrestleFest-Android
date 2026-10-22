@@ -30,6 +30,44 @@ struct ArenaAssets {
     float origin_y = 250.4f;
 };
 
+// The arena's entrance stage (CGameEntrance::onCreate).
+//
+// graphics/Sprites/Arena/entrance/<FolderName>/<SceneFileName> is the stage
+// itself; AttachObjFileName_N are the extra pieces pinned to it (ramp rails,
+// light rigs, pyro columns). Both are authored in the same 1482x711 space as
+// the ring art, so they share the ring's kArtScale. PositionAndGap places the
+// wrestlers: x (negative = centre of the art), z (negative = art height - 200)
+// and the gap a tag partner stands apart by.
+struct EntranceStage {
+    struct Piece {
+        Texture texture;
+        float x = 0.0f;  // art-space top-left
+        float y = 0.0f;
+        float w = 0.0f;
+        float h = 0.0f;
+    };
+
+    Texture background;
+    std::vector<Piece> pieces;
+    float art_scale = 0.72f;
+    float origin_x = -53.5f;  // art-space 0 in logical canvas coordinates
+    float origin_y = 0.0f;
+    float art_width = 1482.0f;
+    float art_height = 711.0f;
+    // Where the wrestlers walk out to, in art space.
+    float start_x = 741.0f;
+    float start_z = 511.0f;
+    float gap = 120.0f;      // already halved, as SetupWrestler uses it
+    float max_show_time = 8.0f;
+    float obj_scale = 1.0f;    // GameObjScale: how large the wrestlers are drawn
+    float actor_scale = 0.72f;  // kArtScale * obj_scale, i.e. the draw scale
+    int crowd_id = 0;
+    bool valid = false;
+
+    float toScreenX(float art_x) const { return origin_x + art_x * art_scale; }
+    float toScreenY(float art_y) const { return origin_y + art_y * art_scale; }
+};
+
 class GameRenderer {
 public:
     bool initialize(AssetLoader *assets, const GameData *data);
@@ -47,10 +85,33 @@ public:
     // select screen for the idle portrait inside the frame.
     void drawActorPortrait(const WrestlerProfile &profile, int sst_id, float center_x,
                            float feet_y, float alpha, float scale = 0.0f);
+    // The shared body of drawActorPortrait / drawEntranceActor: one frame,
+    // anchored at the sprite's feet, optionally mirrored.
+    void drawActorFrame(const WrestlerProfile &profile, int sst_id, float center_x, float feet_y,
+                        float alpha, float scale, bool mirrored);
     void drawMatch(const Match &match, float alpha);
     void drawActor(const Wrestler &wrestler, float alpha);
     void drawArenaFront();
     void drawHud(const Match &match, int player_index);
+
+    // --- entrance cutscene (CGameEntrance::onDraw) ---------------------------
+    // Loads the selected arena's entrance stage (AllEntranceSceneTable), and
+    // draws it with the wrestlers walking out onto it. The stage art is 1482x711
+    // like the ring art, so it is scaled and placed the same way; the floor
+    // under it is the arena's own crowd sheet.
+    const EntranceStage &entranceFor(int entrance_scene_id);
+    void drawEntranceBackground(const EntranceStage &stage);
+    // CCrowd::Draw(CrowdId): the crowd stands in front of the stage art, in the
+    // same art space, animated at eight frames a second.
+    void drawCrowd(const EntranceStage &stage, float dt);
+    // One wrestler on the stage. `feet_x/feet_y` are logical canvas coordinates.
+    void drawEntranceActor(const WrestlerProfile &profile, int sst_id, float feet_x, float feet_y,
+                           float facing, float alpha = 1.0f, float scale = 0.0f);
+    // The name plate CGameEntrance prints along the bottom of the stage shot:
+    // the man's name in yellow at viewportHeight - 100 (his partner's 50 px
+    // above it), a black rule and a red rule two pixels under it at
+    // viewportHeight - 50, and the WWE mark at the end of the rule.
+    void drawEntrancePlate(const std::string &name, const std::string &partner);
 
     SpriteBatch &batch() { return batch_; }
     // Body face (Arial Rounded MT Bold): HUD, result card, prompts.
@@ -92,6 +153,8 @@ public:
     // eight is at most a megabyte) and then kept for the life of the app.
     const Texture &avatarFor(const std::string &wrestler_folder);
     const Texture &arenaSceneFor(const std::string &arena_folder);
+    // The Road to WrestleMania stage cards, keyed by art name.
+    const Texture &roadStageArt(const char *name);
 
     const Texture &stickBase() const { return virtual_stick_base_; }
     const Texture &stickIcon() const { return virtual_stick_icon_; }
@@ -147,6 +210,10 @@ private:
     bool loadAnnouncer();
     // Fetches (and caches) one animation frame of a wrestler bundle.
     const FrameTexture *frameFor(const WrestlerProfile &profile, int sst_id);
+    // Same, for a crowd "person": asset_bundles/Sprites/Arena/crowd/pNN.zip.
+    const FrameTexture *crowdFrame(int person, int dir, int frame);
+    bool openCrowdBundle(int person);
+    void tickCrowd(int crowd_id, float dt);
     void drawEnergyBar(const EnergyBarAssets &assets, const Wrestler &wrestler, float x,
                        float y, bool mirrored);
     void drawTimer(const Match &match);
@@ -221,10 +288,26 @@ private:
     };
     bool openBundle(BundleCache *cache, const std::string &folder);
     std::unordered_map<std::string, BundleCache> bundles_;
+    // One cache per crowd person (15 small palettised archives).
+    struct CrowdCache {
+        ZipArchive archive;
+        AssetLoader::RangeReader reader;
+        bool loaded = false;
+        bool failed = false;
+        std::unordered_map<std::string, FrameTexture> textures;
+    };
+    std::unordered_map<int, CrowdCache> crowd_bundles_;
+    float crowd_clock_ = 0.0f;
+    // Per-crowd-id animation frame for each instance (the tables are const).
+    std::unordered_map<int, std::vector<int>> crowd_frames_;
     std::size_t texture_budget_ = 0;
     // Menu art loaded on demand: wrestler avatars and arena thumbnails.
     std::unordered_map<std::string, Texture> avatars_;
     std::unordered_map<std::string, Texture> arena_scenes_;
+    std::unordered_map<std::string, Texture> road_stage_art_;
+    // Entrance stages are loaded on demand and kept for the life of the app.
+    std::unordered_map<int, EntranceStage> entrances_;
+    EntranceStage entrance_fallback_;
 
     float logical_to_scale_ = 0.72f;
 };
