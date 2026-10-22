@@ -46,6 +46,10 @@ public:
     // Entrance staging: puts every wrestler into ENTRANCE (105). The flow layer
     // holds the match in MatchPhase::Intro until it calls start().
     void playEntrance();
+    // Ends the entrance cutscene: everyone back to IDLE and in his corner, but
+    // the bell has not rung yet - the ring announcer still has to introduce
+    // both men. start() is what rings it.
+    void endEntrance();
     void setAnnouncerCue(AnnouncerCue cue) { announcer_.setCue(cue); }
 
     // Royal Rumble entrant timing: the first `initial_entrants` start in the
@@ -102,6 +106,25 @@ public:
     int outsideCount() const { return outside_count_; }
     bool refereePinTarget(int wrestler) const { return referee_.watchingPinFor(wrestler); }
 
+    // --- Royal Rumble elimination -------------------------------------------
+    // canTossOpponentOutOfRing (Wrestler.cpp:0x2168) + IsFlyOut (0x220e).
+    //
+    //   side = canTossOpponentOutOfRing(victim):
+    //     0  the man is still between the ropes
+    //     1  he is out past the left rope   2 out past the right one
+    //   The percentage roll is part of the same function in the original:
+    //     chance = TossOutPercentage + (100 - TossOutPercentage) * (1 - ratio)
+    //   with `ratio` the thrower's Energy/EnergyMax (TossOutDynamicBy 1) or
+    //   MotionPower/MotionPowerMax (2). So a spent field tosses people out far
+    //   more easily than a fresh one, which is what makes a Rumble converge.
+    int tossOutSide(const Wrestler &victim, const Wrestler *attacker);
+    // Rolls the toss for a hit that is driving `victim` over the ropes on side
+    // `dir` (-1 left, +1 right). On success the victim starts the slide over
+    // the top rope and true is returned; the caller skips its normal reaction.
+    bool attemptRumbleToss(Wrestler &attacker, Wrestler &victim, float dir);
+    // Number of men thrown over the top rope so far.
+    int eliminations() const { return eliminations_; }
+
     // Ends the match immediately (used by tests and by the flow layer).
     void finish(int winner_team);
 
@@ -116,6 +139,8 @@ private:
     void updateRegions();
     void updateOpponents();
     void updateRumbleEntries(float dt);
+    void updateRumbleTossOuts();
+    void eliminateOverRope(Wrestler &winner, Wrestler &victim, int side);
     void checkExhausted();
     void parkLateEntrants();
     void setupTagTeams();
@@ -134,6 +159,7 @@ private:
     int winner_team_ = -1;
     int loser_team_ = -1;
     int main_wrestler_ = 0;
+    int eliminations_ = 0;
     float clock_ = 0.0f;
     float intro_timer_ = 0.0f;
     int outside_count_ = 0;

@@ -28,6 +28,19 @@ void stickDirection(InputFrame *input, float dx, float dz) {
     input->down = dz > 0.0f;
 }
 
+// Royal Rumble: stand on the side of the target that faces the middle of the
+// ring so that a throw drives him outwards. Without this the AI grapples
+// wherever it happens to meet him and nobody ever ends up at the ropes.
+float rumbleApproachX(const Match &match, const Wrestler &self, const Wrestler &other,
+                      float engage_range) {
+    if (!match.isRumble()) return other.x;
+    const float centre = match.ring().centerX();
+    const float side = other.x >= centre ? 1.0f : -1.0f;
+    float x = other.x - side * engage_range * tuning::kRumbleHerdOffset;
+    // Never queue up outside the ropes to do it.
+    return std::clamp(x, match.ring().leftX(self.z) + 10.0f, match.ring().rightX(self.z) - 10.0f);
+}
+
 }  // namespace
 
 int AiEntity::partnerOf(Match &match) const {
@@ -118,7 +131,8 @@ void AiEntity::tickWalk(float dt, Match &match, InputFrame *input) {
                                    ? grapple->collision_range_x - 4.0f
                                    : 96.0f;
     if (std::fabs(dx) > engage_range || std::fabs(dz) > match.common().collision_range_z) {
-        stickToward(input, dx, dz * 0.6f);
+        const float approach_x = rumbleApproachX(match, *self, *other, engage_range);
+        stickToward(input, approach_x - self->x, dz * 0.6f);
         // A long gap is closed at a run: holding the red button puts the
         // wrestler in RUN (CWrestler::TickLocomotion), which is also what makes
         // the running attack available.
@@ -161,7 +175,8 @@ void AiEntity::tickAttackVsOpponent(Match &match, InputFrame *input, int opponen
             if (wants_grapple && !grapple_close) {
                 // Step inside [80..100] grapple reach instead of throwing a
                 // max-range jab that pushes the target back out of clinch range!
-                stickToward(input, dx, dz);
+                stickToward(input, rumbleApproachX(match, *self, *other, grapple_range) - self->x,
+                            dz);
                 return;
             }
             if (wants_grapple && grapple_close) {
@@ -264,9 +279,15 @@ bool AiEntity::tickTag(Match &match, InputFrame *input) {
 void AiEntity::tickRingSide(Match &match, InputFrame *input) {
     Wrestler *self = match.wrestler(actor);
     if (self == nullptr) return;
-    // RingSideState: head for the centre of the ring and climb in.
+    // RingSideState: head for the centre of the ring and climb in. A man on
+    // the floor outside has to get back between the ropes before the referee's
+    // count reaches MaxOutsideCount, so he walks all the way in first.
     const float dx = match.ring().centerX() - self->x;
     stickToward(input, dx, 0.0f);
+    if (self->region != region::OUTSIDE && std::fabs(dx) < 60.0f) {
+        setState(AiState::SearchEnemy, match);
+        return;
+    }
     setState(AiState::Walk, match);
 }
 
@@ -356,6 +377,11 @@ void AiEntity::tick(float dt, Match &match, InputFrame *input) {
             default:
                 break;
         }
+    }
+
+    // A man on the floor at ringside climbs back in before anything else.
+    if (self->region == region::OUTSIDE && !self->isDead()) {
+        setState(AiState::RingSide, match);
     }
 
     // Handlers can hand over to another state in the same tick (the original

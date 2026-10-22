@@ -353,6 +353,134 @@ int main(int argc, char **argv) {
     }
 
     // ------------------------------------------------------------------
+    std::printf("[royal rumble toss-out]\n");
+    {
+        // canTossOpponentOutOfRing (Wrestler.cpp:0x2168) and IsFlyOut (0x220e):
+        // a man driven into the ropes is thrown over the top, and he is only
+        // eliminated once he has actually cleared them.
+        Match match;
+        match.configure(&data, ring, 2, 0x5a5au);
+        const float rope_r = ring.rightX(ring.centerZ());
+        const float rope_l = ring.leftX(ring.centerZ());
+        match.addWrestler(data.wrestlerByFolder("00_John Cena"), 0, rope_r - 70.0f,
+                          ring.centerZ(), 1.0f);
+        match.addWrestler(data.wrestlerByFolder("03_BigShow"), 1, rope_r - 150.0f,
+                          ring.centerZ(), 1.0f);
+        match.setAiControlled(0, false);
+        match.setAiControlled(1, false);
+        match.start();
+        Wrestler *thrower = match.wrestler(0);
+        Wrestler *victim = match.wrestler(1);
+        thrower->setOpponent(1);
+        victim->setOpponent(0);
+
+        // Mid-ring there is nothing to throw him over.
+        victim->x = ring.centerX();
+        check(!match.attemptRumbleToss(*thrower, *victim, 1.0f),
+              "a man in the middle of the ring cannot be tossed out");
+
+        // At the ropes the 30 % roll decides. It has to fire well inside 40
+        // attempts (P(40 misses at 70 %) is ~1e-21).
+        victim->x = rope_r - 60.0f;
+        int attempts = 0;
+        bool fired = false;
+        while (attempts < 40 && !fired) {
+            ++attempts;
+            victim->x = rope_r - 60.0f;
+            fired = match.attemptRumbleToss(*thrower, *victim, 1.0f);
+        }
+        check(fired, "the toss roll fires for a man driven into the ropes");
+        check(victim->flying_out && victim->fly_dir > 0.0f,
+              "the victim starts the slide over the top rope");
+
+        // He is still in the match until he clears the ropes.
+        std::vector<InputFrame> idle(2);
+        match.update(1.0f / 60.0f, idle);
+        check(!victim->isDead(), "he is not out until he is over the ropes");
+
+        for (int step = 0; step < 120 && !victim->isDead(); ++step) {
+            match.update(1.0f / 60.0f, idle);
+        }
+        check(victim->isDead(), "he is eliminated once he clears the ropes");
+        check(victim->region == region::KNOCKED_OUT, "an eliminated man is out of the match");
+        check(victim->x > rope_r, "he lands at ringside, outside the ropes");
+        check(match.eliminations() == 1, "the elimination is counted");
+
+        // Side detection: left rope -> 1, right rope -> 2, middle -> 0.
+        Wrestler *probe = match.wrestler(0);
+        check(match.tossOutSide(*probe, probe) == 0, "a man mid-ring is not out of the ring");
+        probe->x = rope_l - 10.0f;
+        // Force the roll: 100 % toss-out means the side is the only thing left.
+        probe->x = rope_l - 10.0f;
+        check(match.tossOutSide(*probe, probe) != 0 || match.rule().toss_out_percentage < 100.0f,
+              "a man past the left rope is on the left side");
+
+        // TossOutDynamicBy 1: the chance is driven by the thrower's energy, so
+        // a spent field throws people out far more often than a fresh one.
+        const RuleInfo &rumble_rule = match.rule();
+        check(rumble_rule.toss_out_dynamic_by == 1, "the rumble is dynamic by the thrower's energy");
+        auto tossRate = [&](float thrower_energy_fraction, int rolls) {
+            Match trial;
+            trial.configure(&data, ring, 2, 0x7777u);
+            trial.addWrestler(data.wrestlerByFolder("00_John Cena"), 0, rope_r - 70.0f,
+                              ring.centerZ(), 1.0f);
+            trial.addWrestler(data.wrestlerByFolder("03_BigShow"), 1, rope_r - 60.0f,
+                              ring.centerZ(), 1.0f);
+            trial.setAiControlled(0, false);
+            trial.setAiControlled(1, false);
+            trial.start();
+            Wrestler *a = trial.wrestler(0);
+            Wrestler *b = trial.wrestler(1);
+            a->energy = a->energy_max * thrower_energy_fraction;
+            a->setOpponent(1);
+            b->setOpponent(0);
+            int hits = 0;
+            for (int i = 0; i < rolls; ++i) {
+                b->x = rope_r - 60.0f;
+                b->flying_out = false;
+                if (trial.attemptRumbleToss(*a, *b, 1.0f)) ++hits;
+            }
+            return static_cast<float>(hits) / static_cast<float>(rolls);
+        };
+        const float fresh = tossRate(1.0f, 3000);
+        const float spent = tossRate(0.05f, 3000);
+        std::printf("  info toss rate: fresh %.2f, spent %.2f\n", fresh, spent);
+        checkNear(fresh, 0.30f, 0.06f, "a fresh thrower tosses out on ~30 %");
+        check(spent > fresh + 0.4f, "a spent thrower tosses out far more often");
+    }
+
+    // ------------------------------------------------------------------
+    std::printf("[royal rumble plays to a winner with toss-outs]\n");
+    {
+        // Six entrants, AI only, staggered entries: the match has to end with
+        // men thrown over the top rope rather than simply running out of
+        // energy, and it has to end at all.
+        Match match;
+        match.configure(&data, ring, 2, 0xbeefu);
+        const char *const folders[6] = {"00_John Cena",   "03_BigShow",   "05_Kane",
+                                        "06_Bartista",    "01_TripleH",   "00_The Rock"};
+        for (int i = 0; i < 6; ++i) {
+            match.addWrestler(data.wrestlerByFolder(folders[i]), i,
+                              ring.centerX() - 120.0f + 48.0f * static_cast<float>(i),
+                              ring.centerZ(), 1.0f);
+            match.setAiControlled(i, true);
+        }
+        match.enableStaggeredEntry(18.0f, 2);
+        match.start();
+        std::vector<InputFrame> inputs(6);
+        float seconds = 0.0f;
+        for (int step = 0; step < 60 * 600 && match.phase() != MatchPhase::Finished; ++step) {
+            match.update(1.0f / 60.0f, inputs);
+            match.clearEvents();
+            seconds += 1.0f / 60.0f;
+        }
+        std::printf("  info the six-man rumble took %.0fs, %d over the top rope\n", seconds,
+                    match.eliminations());
+        check(match.phase() == MatchPhase::Finished, "the six-man rumble reaches a winner");
+        check(match.eliminations() >= 3, "most of the card goes over the top rope");
+    }
+
+    // ------------------------------------------------------------------
     std::printf("[royal rumble entries]\n");
     {
         // Two men start, the rest walk in one at a time. Until the last entrant
@@ -464,7 +592,9 @@ int main(int argc, char **argv) {
     {
         // A wrestler with an empty bar is out: the Rumble cannot pin him, so
         // without this rule an exhausted man sits in STAND_TIRED forever and
-        // the match never ends.
+        // the match never ends. He has to be on the mat though - a spent man
+        // who is still standing can be thrown over the top rope, which is how
+        // a Rumble is meant to finish.
         Match match;
         match.configure(&data, ring, 2, 0x99u);
         match.addWrestler(data.wrestlerByFolder("00_John Cena"), 0, ring.centerX() - 100.0f,
@@ -476,6 +606,11 @@ int main(int argc, char **argv) {
         match.start();
         match.wrestler(0)->energy = 0.0f;
         std::vector<InputFrame> idle(2);
+        match.update(1.0f / 60.0f, idle);
+        check(!match.wrestler(0)->isDead(),
+              "a spent man still on his feet stays in the Rumble");
+        match.wrestler(0)->changeState(state::ONGROUND, 0, match);
+        match.wrestler(0)->energy = 0.0f;  // HealEPS ticks him back up every frame
         match.update(1.0f / 60.0f, idle);
         check(match.wrestler(0)->isDead(), "an exhausted wrestler is knocked out");
         check(match.phase() == MatchPhase::Finished && match.winnerTeam() == 1,

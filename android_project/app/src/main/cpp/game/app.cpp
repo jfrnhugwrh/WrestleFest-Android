@@ -146,20 +146,133 @@ void GameApp::beginMatchFlow(const WrestlerProfile *player, const WrestlerProfil
     match_.allowAutoStart(false);
     match_.playEntrance();
 
-    intro_stage_ = IntroStage::Entrance;
-    intro_timer_ = 0.0f;
-    intro_stage_length_ = 3.2f;
-    // Entrance music: the original streams a track per superstar; the WAV cue
-    // set here is the announcer, which plays on the announce beats below.
     inputs_.assign(static_cast<std::size_t>(match_.wrestlerCount()), InputFrame{});
     accumulator_ = 0.0;
     finish_hold_ = 0.0f;
     red_edge_ = blue_edge_ = false;
     red_down_ = blue_down_ = false;
     stick_.active = false;
+    intro_skip_ = false;
+    entrance_stage_ = nullptr;
+
+    // CGameEntrance: every man walks out on the arena's entrance stage before
+    // the ring announcer introduces him. The stage is the arena's own - it is
+    // picked by AllArenaTable.EnrtanceSceneId into AllEntranceSceneTable.
+    setupEntranceShows();
+    entrance_show_ = 0;
+    beginEntranceShow();
+
     scene_ = Scene::Match;
     __android_log_print(ANDROID_LOG_INFO, kLogTag, "match start: %s vs %s", player->name.c_str(),
                         opponent->name.c_str());
+}
+
+// ---------------------------------------------------------------------------
+// Entrance cutscene (CGameEntrance)
+// ---------------------------------------------------------------------------
+void GameApp::setupEntranceShows() {
+    entrance_shows_.clear();
+    const int count = match_.wrestlerCount();
+    if (count < 2) return;
+    if (match_.isRumble()) {
+        // A Rumble only shows the player: five more men walk in during the
+        // match, and the card is not known until they do.
+        entrance_shows_.push_back({0, -1, 0});
+        return;
+    }
+    if (match_.tagEnabled()) {
+        // Tag: both partners walk out together (SetupWrestler(partner, true)).
+        entrance_shows_.push_back({0, 1, 0});
+        entrance_shows_.push_back({2, 3, 1});
+        return;
+    }
+    entrance_shows_.push_back({0, -1, 0});
+    entrance_shows_.push_back({1, -1, 1});
+}
+
+const EntranceStage &GameApp::entranceStage() {
+    if (entrance_stage_ != nullptr) return *entrance_stage_;
+    int scene_id = 0;
+    if (!data_.arenas().empty()) {
+        const int index = std::clamp(arena_index_, 0, static_cast<int>(data_.arenas().size()) - 1);
+        scene_id = data_.arenas()[static_cast<std::size_t>(index)].entrance_scene_id;
+    }
+    entrance_stage_ = &renderer_.entranceFor(scene_id);
+    return *entrance_stage_;
+}
+
+void GameApp::beginEntranceShow() {
+    if (entrance_show_ >= entrance_shows_.size()) {
+        beginAnnouncePlayer();
+        return;
+    }
+    const EntranceStage &stage = entranceStage();
+    intro_stage_ = entrance_show_ == 0 ? IntroStage::EntrancePlayer : IntroStage::EntranceOpponent;
+    intro_timer_ = 0.0f;
+    intro_skip_ = false;
+    // MaxShowTime from AllEntranceSceneTable, 6 s for the modern stages and 8 s
+    // for the basic one. A tap on the screen cuts it short.
+    intro_stage_length_ = stage.valid ? std::max(2.0f, stage.max_show_time) : 6.0f;
+    match_.setAnnouncerCue(AnnouncerCue::Entrance);
+    // Entrance music: the original streams a per-superstar track (CMusic 4 for
+    // the legends, 5 for the moderns); this port only has the WAV cue set, so
+    // the crowd and the pyro sting stand in for it.
+    playCue("audio/sfx/crowd_entrance_1shot_pos_lev1.wav");
+    playCue("audio/sfx/9011_Large_Crowd_F01.wav");
+}
+
+void GameApp::beginAnnouncePlayer() {
+    match_.endEntrance();  // out of the aisle, into the ring, waiting for the bell
+    intro_stage_ = IntroStage::AnnouncePlayer;
+    intro_timer_ = 0.0f;
+    intro_skip_ = false;
+    match_.setAnnouncerCue(AnnouncerCue::AnnounceLeft);
+    intro_stage_length_ = announce(playerProfile());
+}
+
+void GameApp::beginAnnounceOpponent() {
+    intro_stage_ = IntroStage::AnnounceOpponent;
+    intro_timer_ = 0.0f;
+    intro_skip_ = false;
+    match_.setAnnouncerCue(AnnouncerCue::AnnounceRight);
+    intro_stage_length_ = announce(opponentProfile());
+}
+
+void GameApp::beginFight() {
+    intro_stage_ = IntroStage::Fight;
+    intro_timer_ = 0.0f;
+    intro_skip_ = false;
+    match_.setAnnouncerCue(AnnouncerCue::FightExit);
+    intro_stage_length_ = 1.1f;
+    playCue("audio/sfx/9011_Large_Crowd_F01.wav");
+}
+
+void GameApp::advanceIntro() {
+    switch (intro_stage_) {
+        case IntroStage::EntrancePlayer:
+        case IntroStage::EntranceOpponent:
+            ++entrance_show_;
+            if (entrance_show_ < entrance_shows_.size()) {
+                beginEntranceShow();
+                return;
+            }
+            beginAnnouncePlayer();
+            return;
+        case IntroStage::AnnouncePlayer:
+            beginAnnounceOpponent();
+            return;
+        case IntroStage::AnnounceOpponent:
+            beginFight();
+            return;
+        case IntroStage::Fight:
+            intro_stage_ = IntroStage::Done;
+            intro_stage_length_ = 0.0f;
+            match_.setAnnouncerCue(AnnouncerCue::Hidden);
+            match_.start();  // the bell
+            return;
+        case IntroStage::Done:
+            return;
+    }
 }
 
 void GameApp::startRumble(const WrestlerProfile *player, const WrestlerProfile *opponent) {
@@ -269,6 +382,7 @@ void GameApp::update(double frame_seconds) {
         case Scene::Modes:
         case Scene::Select:
         case Scene::Arena:
+        case Scene::Road:
         case Scene::Options:
             updateMenus(static_cast<float>(frame_seconds));
             break;
@@ -339,7 +453,11 @@ void GameApp::update(double frame_seconds) {
         case Scene::Result:
             if (tap_pending_) {
                 tap_pending_ = false;
-                enterScene(Scene::MainMenu);
+                if (on_road_) {
+                    returnFromRoadMatch();
+                } else {
+                    enterScene(Scene::MainMenu);
+                }
             }
             break;
     }
@@ -377,10 +495,17 @@ const WrestlerProfile *GameApp::opponentProfile() const {
 
 void GameApp::enterScene(Scene scene) {
     scene_ = scene;
+    // Leaving the match by any route other than the result screen abandons the
+    // road run, so the next result does not jump back to the ladder.
+    if (scene != Scene::Result) on_road_ = false;
     confirm_timer_ = 0.0f;
     confirm_action_ = false;
     notice_timer_ = 0.0f;
     tap_pending_ = false;
+    if (scene == Scene::Road) {
+        road_result_.clear();
+        road_cursor_ = road_.stage;
+    }
     if (scene == Scene::Select) {
         superstar_page_ = clampPage(pageOfSelection(selected_player_, menu::kGridPageSize),
                                     pageCount(static_cast<int>(data_.wrestlers().size()),
@@ -407,7 +532,9 @@ void GameApp::updateMenus(float dt) {
         if (confirm_timer_ <= 0.0f && confirm_action_) {
             confirm_action_ = false;
             if (scene_ == Scene::Select) {
-                enterScene(Scene::Arena);
+                // Road to WrestleMania picks the arena per card, so there is
+                // no arena screen on the way - straight to the ladder.
+                enterScene(mode_ == menu::kRuleRoadToWrestleMania ? Scene::Road : Scene::Arena);
             } else if (scene_ == Scene::Arena) {
                 startSelectedMatch();
             }
@@ -432,6 +559,9 @@ void GameApp::handleMenuTap(float x, float y) {
             break;
         case Scene::Arena:
             handleArenaTap(x, y);
+            break;
+        case Scene::Road:
+            handleRoadTap(x, y);
             break;
         case Scene::Options:
             handleOptionsTap(x, y);
@@ -478,13 +608,17 @@ void GameApp::handleModesTap(float x, float y) {
     if (entry < 0) return;
     mode_entry_ = entry;
     const int rule = menu::modeGameRule(entry);
-    if (rule < 0) {
+    if (rule < 0 && !menu::modeHasOwnFlow(entry)) {
         showNotice(std::string(menu::modeLabel(entry)) + " IS NOT AVAILABLE IN THIS BUILD");
         return;
     }
     playCue("audio/sfx/Ui01.wav");
-    // Same numbering as Match::configure: 0 = 1 VS 1, 1 = tag, 2 = rumble.
-    mode_ = rule;
+    // Same numbering as Match::configure (see menu::kRule*), except the modes
+    // with their own flow: Road to WrestleMania has no single rule, every card
+    // on its ladder carries one.
+    mode_ = menu::modeHasOwnFlow(entry) ? menu::kRuleRoadToWrestleMania : rule;
+    // Road to WrestleMania runs its own ladder, but it still starts by picking
+    // the superstar you take down the road.
     enterScene(Scene::Select);
 }
 
@@ -580,6 +714,117 @@ void GameApp::handleArenaTap(float x, float y) {
     confirm_action_ = true;
 }
 
+void GameApp::handleRoadTap(float x, float y) {
+    const road::Level *level = road_.current();
+    const int count = level != nullptr ? static_cast<int>(level->stages.size()) : 0;
+    if (menu::backHit(x, y)) {
+        playCue("audio/sfx/Ui01.wav");
+        enterScene(Scene::Modes);
+        return;
+    }
+    if (menu::nextArrowHit(x, y)) {
+        if (road_cursor_ + 1 < count) {
+            ++road_cursor_;
+            road_result_.clear();
+            playCue("audio/sfx/Ui01.wav");
+        }
+        return;
+    }
+    if (menu::previousArrowHit(x, y)) {
+        if (road_cursor_ > 0) {
+            --road_cursor_;
+            road_result_.clear();
+            playCue("audio/sfx/Ui01.wav");
+        }
+        return;
+    }
+    road_result_.clear();
+    if (!menu::roadCardHit(x, y)) return;
+    if (road_.complete()) return;  // the road is finished; nothing left to play
+    if (road_cursor_ > road_.stage) {
+        showNotice("WIN THE EARLIER MATCHES FIRST");
+        return;
+    }
+    playCue("audio/sfx/Ui01.wav");
+    startRoadMatch();
+}
+
+// Road to WrestleMania: the card under the ladder's cursor decides the rule,
+// the field and the arena; everything else is the ordinary match flow.
+void GameApp::startRoadMatch() {
+    const road::Level *level = road_.current();
+    if (level == nullptr) return;
+    const WrestlerProfile *player = playerProfile();
+    if (player == nullptr || data_.wrestlers().empty()) return;
+    const int index = std::clamp(road_cursor_, 0, static_cast<int>(level->stages.size()) - 1);
+    const road::Stage &stage = level->stages[static_cast<std::size_t>(index)];
+
+    // The card picks the arena, not the player.
+    if (!data_.arenas().empty()) {
+        arena_index_ = std::clamp(stage.arena, 0, static_cast<int>(data_.arenas().size()) - 1);
+    }
+    applyArena();
+
+    const RingGeometry ring;
+    match_.configure(&data_, ring, stage.rule,
+                     0x20120423u ^ static_cast<std::uint32_t>(clock_ * 1000.0f) ^ 0x9e3779b9u);
+
+    // Distinct men off the card, the player first.
+    const int total = static_cast<int>(data_.wrestlers().size());
+    const int wanted = std::clamp(stage.wrestlers, 2, 6);
+    std::vector<const WrestlerProfile *> card;
+    card.push_back(player);
+    for (int slot = 1; slot < wanted && static_cast<int>(card.size()) < total; ++slot) {
+        for (int step = 0; step < total; ++step) {
+            const int pick = (selected_player_ + slot * 7 + step) % total;
+            const WrestlerProfile &candidate = data_.wrestlers()[static_cast<std::size_t>(pick)];
+            bool taken = false;
+            for (const WrestlerProfile *chosen : card) {
+                if (chosen->folder == candidate.folder) taken = true;
+            }
+            if (taken) continue;
+            card.push_back(&candidate);
+            break;
+        }
+    }
+    if (card.size() < 2) return;
+
+    const int count = static_cast<int>(card.size());
+    // Spread the field evenly across the ring, the player on the left.
+    for (int i = 0; i < count; ++i) {
+        const float t = count > 1 ? static_cast<float>(i) / static_cast<float>(count - 1) : 0.5f;
+        const float x = ring.centerX() - 180.0f + 360.0f * t;
+        const float z = ring.centerZ() + (i % 2 == 0 ? -20.0f : 20.0f);
+        // Tag is the only card with sides; everything else is every man for
+        // himself, so each man gets his own team.
+        const int team = stage.rule == menu::kRuleTagTeam ? (i < 2 ? 0 : 1) : i;
+        match_.addWrestler(card[static_cast<std::size_t>(i)], team, x, z, i == 0 ? 1.0f : -1.0f);
+    }
+    controlled_ = 0;
+    match_.setAiControlled(0, false);  // the human
+    for (int i = 1; i < match_.wrestlerCount(); ++i) match_.setAiControlled(i, true);
+    if (stage.rule == menu::kRuleTagTeam) match_.enableTagTeams(true);
+    if (stage.rule == menu::kRuleRoyalRumble) match_.enableStaggeredEntry(25.0f, 2);
+
+    on_road_ = true;
+    beginMatchFlow(player, card[1]);
+}
+
+void GameApp::returnFromRoadMatch() {
+    on_road_ = false;
+    const bool won = match_.winnerTeam() == 0;
+    if (won) {
+        // Only the card at the head of the run moves it on; replaying an
+        // earlier one is just a rematch.
+        if (road_cursor_ == road_.stage) road_.advance();
+        road_result_ = road_.complete() ? "YOU ARE THE CHAMPION" : "YOU WON";
+    } else {
+        road_result_ = "YOU LOST - TRY AGAIN";
+    }
+    road_cursor_ = road_.stage;
+    enterScene(Scene::Road);
+}
+
 void GameApp::chooseOpponent() {
     const int count = static_cast<int>(data_.wrestlers().size());
     if (count <= 1) return;
@@ -593,60 +838,39 @@ void GameApp::startSelectedMatch() {
     const WrestlerProfile *player = playerProfile();
     const WrestlerProfile *opponent = opponentProfile();
     if (player == nullptr || opponent == nullptr) return;
-    if (mode_ == 1) {
-        startRumble(player, opponent);
-    } else if (mode_ == 2) {
-        startTagMatch(player, opponent);
-    } else {
-        startMatch(player, opponent);
+    // Dispatch on the rule id from menu::modeGameRule, which is also the
+    // InGameTable id Match::configure takes - never on a local renumbering.
+    switch (mode_) {
+        case menu::kRuleTagTeam:
+            startTagMatch(player, opponent);
+            break;
+        case menu::kRuleRoyalRumble:
+            startRumble(player, opponent);
+            break;
+        default:
+            startMatch(player, opponent);
+            break;
     }
 }
 
 void GameApp::updateIntro(float dt) {
     intro_timer_ += dt;
-    if (intro_timer_ < intro_stage_length_) return;
-    intro_timer_ = 0.0f;
-
-    const WrestlerProfile *player = data_.wrestlers().empty()
-                                        ? nullptr
-                                        : &data_.wrestlers()[static_cast<std::size_t>(selected_player_)];
-    const WrestlerProfile *opponent = data_.wrestlers().empty()
-                                          ? nullptr
-                                          : &data_.wrestlers()[static_cast<std::size_t>(selected_opponent_)];
-    auto announce = [&](const WrestlerProfile *profile) {
-        const SfxInfo *cue = profile != nullptr ? profile->introCue() : nullptr;
-        if (cue == nullptr) return 1.2f;
-        playCue(("audio/sfx/" + cue->file_name).c_str());
-        // Hold on the call for its own length (the table stores it).
-        return cue->length > 0.0f ? cue->length : 2.5f;
-    };
-
-    switch (intro_stage_) {
-        case IntroStage::Entrance:
-            intro_stage_ = IntroStage::AnnouncePlayer;
-            match_.setAnnouncerCue(AnnouncerCue::AnnounceLeft);
-            intro_stage_length_ = announce(player);
-            break;
-        case IntroStage::AnnouncePlayer:
-            intro_stage_ = IntroStage::AnnounceOpponent;
-            match_.setAnnouncerCue(AnnouncerCue::AnnounceRight);
-            intro_stage_length_ = announce(opponent);
-            break;
-        case IntroStage::AnnounceOpponent:
-            intro_stage_ = IntroStage::Fight;
-            match_.setAnnouncerCue(AnnouncerCue::FightExit);
-            intro_stage_length_ = 1.1f;
-            playCue("audio/sfx/9011_Large_Crowd_F01.wav");
-            break;
-        case IntroStage::Fight:
-            intro_stage_ = IntroStage::Done;
-            match_.setAnnouncerCue(AnnouncerCue::Hidden);
-            intro_stage_length_ = 0.0f;
-            match_.start();  // the bell
-            break;
-        case IntroStage::Done:
-            break;
+    if (intro_skip_) {
+        intro_skip_ = false;
+        advanceIntro();
+        return;
     }
+    if (intro_timer_ < intro_stage_length_) return;
+    advanceIntro();
+}
+
+// Ring announcer: plays the superstar's call and holds the beat for exactly the
+// length the SFX table gives it, so the banner drops with the crowd clip.
+float GameApp::announce(const WrestlerProfile *profile) {
+    const SfxInfo *cue = profile != nullptr ? profile->introCue() : nullptr;
+    if (cue == nullptr) return 1.2f;
+    playCue(("audio/sfx/" + cue->file_name).c_str());
+    return cue->length > 0.0f ? cue->length : 2.5f;
 }
 
 void GameApp::applyArena() {
@@ -769,6 +993,11 @@ void GameApp::touchDown(int pointer_id, float x, float y) {
         tap_y_ = y;
         return;
     }
+    if (intro_stage_ != IntroStage::Done) {
+        // CSkipButton: a tap anywhere cuts the pre-match staging short.
+        intro_skip_ = true;
+        return;
+    }
     if (insideCircle(x, y, kRedX, kRedY, kRedRadius)) {
         button_red_.id = pointer_id;
         button_red_.active = true;
@@ -863,16 +1092,24 @@ void GameApp::render(int viewport_x, int viewport_y, int viewport_w, int viewpor
             menu_.drawArenaPage(clampPage(arena_page_, pages), arena_pick_, pages);
             break;
         }
+        case Scene::Road:
+            menu_.drawRoad(road_, road_cursor_, road_result_);
+            break;
         case Scene::Options:
             drawOptions();
             break;
         case Scene::Match:
-            renderer_.drawMatch(match_, 0.0f);
-            renderer_.drawHud(match_, controlled_);
-            if (intro_stage_ != IntroStage::Done) {
-                drawIntroBanner();
+            if (intro_stage_ == IntroStage::EntrancePlayer ||
+                intro_stage_ == IntroStage::EntranceOpponent) {
+                drawEntrance();
             } else {
-                drawTouchControls();
+                renderer_.drawMatch(match_, 0.0f);
+                renderer_.drawHud(match_, controlled_);
+                if (intro_stage_ != IntroStage::Done) {
+                    drawIntroBanner();
+                } else {
+                    drawTouchControls();
+                }
             }
             if (paused_) drawPauseOverlay();
             break;
@@ -1004,6 +1241,59 @@ void GameApp::drawPauseOverlay() {
                                Color{0.12f, 0.15f, 0.2f, 1.0f});
 }
 
+// CGameEntrance::onDraw: the stage, the crowd behind it, the men walking out
+// on it, and the name plate along the bottom.
+void GameApp::drawEntrance() {
+    const EntranceStage &stage = entranceStage();
+    renderer_.drawEntranceBackground(stage);
+    // The crowd stands in front of the stage and fills the bottom of the shot.
+    renderer_.drawCrowd(stage, 1.0f / 60.0f);
+
+    // Fade up from black over the first half second of the show.
+    if (intro_timer_ < 0.5f) {
+        renderer_.batch().draw(renderer_.white(), 0.0f, 0.0f, 960.0f, 640.0f,
+                               Color{0.0f, 0.0f, 0.0f, 1.0f - intro_timer_ / 0.5f});
+    }
+
+    if (entrance_show_ >= entrance_shows_.size()) return;
+    const EntranceShow &show = entrance_shows_[entrance_show_];
+    if (show.first < 0) return;
+    const bool pair = show.second >= 0;
+    const float feet_y = stage.toScreenY(stage.start_z);
+    // SetupWrestler: the man himself stands at the show's X and his partner
+    // one gap away, both on the same depth line.
+    const float main_x = stage.toScreenX(pair ? stage.start_x - stage.gap : stage.start_x);
+    drawEntranceWrestler(show.first, main_x, feet_y, stage.actor_scale);
+    if (pair) {
+        drawEntranceWrestler(show.second, stage.toScreenX(stage.start_x + stage.gap), feet_y,
+                             stage.actor_scale);
+    }
+
+    // The name plate along the bottom: the man's name, his partner's above it,
+    // the double rule and the WWE mark at the end of it.
+    const Wrestler *main = match_.wrestler(show.first);
+    const Wrestler *other = pair ? match_.wrestler(show.second) : nullptr;
+    renderer_.drawEntrancePlate(main != nullptr && main->profile() != nullptr
+                                    ? main->profile()->name
+                                    : std::string(),
+                                other != nullptr && other->profile() != nullptr
+                                    ? other->profile()->name
+                                    : std::string());
+
+    if (intro_timer_ > 1.0f) {
+        renderer_.drawTextCentered("TAP TO SKIP", 880.0f, 470.0f, 0.34f,
+                                   Color{1.0f, 1.0f, 1.0f, 0.35f});
+    }
+}
+
+void GameApp::drawEntranceWrestler(int index, float feet_x, float feet_y, float scale) {
+    const Wrestler *w = match_.wrestler(index);
+    if (w == nullptr || w->profile() == nullptr) return;
+    // He plays his own entrance animation (EntranceInfo.AnimList) while he is
+    // out here; the hard camera looks straight at him, so he is never mirrored.
+    renderer_.drawEntranceActor(*w->profile(), w->spriteId(), feet_x, feet_y, 1.0f, 1.0f, scale);
+}
+
 void GameApp::drawIntroBanner() {
     SpriteBatch &batch = renderer_.batch();
     batch.draw(renderer_.white(), 0.0f, 500.0f, 960.0f, 140.0f, Color{0.0f, 0.0f, 0.0f, 0.55f});
@@ -1014,9 +1304,9 @@ void GameApp::drawIntroBanner() {
         opponent = &data_.wrestlers()[static_cast<std::size_t>(selected_opponent_)];
     }
     switch (intro_stage_) {
-        case IntroStage::Entrance:
-            renderer_.drawTextCentered("MAKING THEIR WAY TO THE RING", 480.0f, 520.0f, 0.6f,
-                                       Color{0.9f, 0.9f, 1.0f, 1.0f});
+        case IntroStage::EntrancePlayer:
+        case IntroStage::EntranceOpponent:
+            // The banner is drawn by drawEntrance(); it has the name plate.
             break;
         case IntroStage::AnnouncePlayer:
             if (player != nullptr) {

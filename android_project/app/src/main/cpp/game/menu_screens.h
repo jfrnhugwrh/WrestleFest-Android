@@ -11,6 +11,7 @@
 
 #include "game_renderer.h"
 #include "menu_layout.h"
+#include "road.h"
 
 #include <string>
 
@@ -33,6 +34,11 @@ public:
     // this page (-1 when nothing is picked yet).
     void drawSuperstarPage(int page, int selected, int page_count);
     void drawArenaPage(int page, int selected, int page_count);
+
+    // Road to WrestleMania: one card of the ladder at a time, the level name
+    // above it and the match name below. `cursor` is the card being looked at;
+    // cards past the run's progress are locked behind it.
+    void drawRoad(const road::Progress &progress, int cursor, const std::string &result);
 
     // Small centred message used for the modes this build cannot start yet.
     void drawNotice(const std::string &text, float alpha);

@@ -123,9 +123,11 @@ void Wrestler::changeState(int new_state, int chain, Match &match) {
                 duration_ = animDuration(*data_, info->anim_id);
                 // AdjustOpponentXZ: paired animations share one origin, so the
                 // opponent is re-seated at anim.xOffset in front of the actor.
+                // A man who is out of the match (thrown over the top rope, or
+                // already posed for the result screen) is left where he fell.
                 if (anim->x_offset != 0.0f) {
                     Wrestler *other = match.wrestler(opponent_);
-                    if (other != nullptr) {
+                    if (other != nullptr && !other->isDead() && !isDead()) {
                         other->x = x + facing * anim->x_offset * tuning::kPairedOffsetScale;
                         if (other->profile_ != nullptr && other->ring_ != nullptr) {
                             other->x = other->ring_->clampX(other->z, other->x);
@@ -264,6 +266,41 @@ bool Wrestler::loopsAnimation() const {
            s == state::VICTORY || s == state::LOSE ||
            (s == state::ENTRANCE &&
             (profile_ == nullptr || profile_->entrance.anims.empty()));
+}
+
+bool Wrestler::canLeaveRing() const {
+    // The ropes only stop a man who is on his feet. A body that has been
+    // thrown, whipped or knocked into them goes over the top.
+    const int s = subState();
+    if (flying_out) return true;
+    if (s == state::KNOCKED_BACK || s == state::SLAMMED || s == state::ROPEFLING ||
+        s == state::IRISH_WHIPPED || s == state::AIRBORNE || s == state::PUSHOFF ||
+        s == state::BE_USED_F_WS || s == state::BE_USED_RFWS || s == state::BE_USED_RAM_WS) {
+        return true;
+    }
+    return region == region::OUTSIDE || region == region::RINGSIDE;
+}
+
+float Wrestler::flyOutSpeed(const Match &match) const {
+    return match.common().airborne_factor_x * tuning::kFlyOutSpeedFactor;
+}
+
+void Wrestler::startFlyOut(float dir, Match &match) {
+    if (isDead()) return;
+    flying_out = true;
+    fly_dir = dir >= 0.0f ? 1.0f : -1.0f;
+    whip_bounced = false;
+    pinned = false;
+    held = false;
+    // CRoyalRumbleController::FallOut -> CWrestler::ChangeState(actor, 14):
+    // the man tumbles over the rope and lands on the floor at ringside.
+    changeState(state::SLAMMED, 0, match);
+}
+
+void Wrestler::tickFlyOut(float dt, Match &match) {
+    if (!flying_out) return;
+    x += fly_dir * flyOutSpeed(match) * dt;
+    if (ring_ != nullptr) x = ring_->clampXArena(z, x);
 }
 
 void Wrestler::advanceAnimation(float dt) {
@@ -778,6 +815,13 @@ void Wrestler::tickStrike(float dt, Match &match) {
 // Reactions / ground
 // ---------------------------------------------------------------------------
 void Wrestler::tickReaction(float dt, Match &match) {
+    tickFlyOut(dt, match);
+    if (flying_out) {
+        // The tumble over the rope keeps going until Match says he has landed;
+        // the clip itself is short, so hold it rather than snapping to the mat.
+        if (anim_finished_) anim_time = duration_;
+        return;
+    }
     (void)dt;
     if (anim_finished_) {
         if (subState() == state::SLAMMED || subState() == state::KNOCKED_BACK) {
@@ -812,6 +856,11 @@ void Wrestler::tickGround(float dt, Match &match, const InputFrame &input) {
 // Irish whip
 // ---------------------------------------------------------------------------
 void Wrestler::tickWhip(float dt, Match &match) {
+    tickFlyOut(dt, match);
+    if (flying_out) {
+        if (anim_finished_) anim_time = duration_;
+        return;
+    }
     const bool whipped = subState() == state::IRISH_WHIPPED;
     // The whipped wrestler runs away from the attacker and bounces off the ropes.
     const float speed = match.common().airborne_factor_x * 0.6f;
@@ -903,7 +952,9 @@ void Wrestler::tickGrapple(float dt, Match &match, const InputFrame &input) {
                     ++clinch_strikes;
                     if (clinch_strikes >= tuning::kMaxClinchStrikes || other->energy <= 0.0f) {
                         changeState(state::IDLE, 0, match);
-                        other->changeState(state::SLAMMED, 0, match);
+                        if (!match.attemptRumbleToss(*this, *other, facing)) {
+                            other->changeState(state::SLAMMED, 0, match);
+                        }
                         match.emit(
                             {EventType::KnockDown, other->id(), id_, dmg, state::SLAMMED});
                         return;
@@ -1134,7 +1185,11 @@ void Wrestler::applyMoveHit(Match &match) {
     other->facing = -facing;
 
     const int entry = subState();
-    if (entry != state::USE_F_WS && entry != state::USE_S_WS && entry != state::USE_CL_WS) {
+    // Royal Rumble: a throw that drives a man into the ropes can put him over
+    // the top. When it fires, attemptRumbleToss owns the victim's state.
+    const bool tossed = match.attemptRumbleToss(*this, *other, facing);
+    if (!tossed && entry != state::USE_F_WS && entry != state::USE_S_WS &&
+        entry != state::USE_CL_WS) {
         if (other->isDown()) {
             other->changeState(state::ONGROUND_HURT, 0, match);
         } else if (entry == state::USE_RFWS || entry == state::USE_RFWS_RUSH ||

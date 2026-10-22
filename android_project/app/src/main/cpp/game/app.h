@@ -20,6 +20,7 @@
 #include "../sim/match.h"
 #include "game_renderer.h"
 #include "menu_screens.h"
+#include "road.h"
 
 #include <memory>
 #include <string>
@@ -47,6 +48,7 @@ enum class Scene {
     Modes,
     Select,
     Arena,
+    Road,
     Options,
     Match,
     Result,
@@ -79,6 +81,19 @@ private:
     void applyArena();
     void stepSimulation(float dt);
     void updateIntro(float dt);
+    const EntranceStage &entranceStage();
+    // CGameEntrance: build the running order, play a show, then hand over to the
+    // ring announcer and the bell.
+    void setupEntranceShows();
+    void beginEntranceShow();
+    void beginAnnouncePlayer();
+    void beginAnnounceOpponent();
+    void beginFight();
+    void advanceIntro();
+    // Plays a superstar's ring-announcer call and returns its length in seconds.
+    float announce(const WrestlerProfile *profile);
+    void drawEntrance();
+    void drawEntranceWrestler(int index, float feet_x, float feet_y, float scale);
     void drawIntroBanner();
     void drawTouchControls();
     void drawPauseOverlay();
@@ -94,7 +109,12 @@ private:
     void handleOptionsTap(float x, float y);
     void handleSuperstarTap(float x, float y);
     void handleArenaTap(float x, float y);
+    void handleRoadTap(float x, float y);
     void startSelectedMatch();
+    // Road to WrestleMania: plays the card under the ladder's cursor, and
+    // comes back to the ladder when it is over.
+    void startRoadMatch();
+    void returnFromRoadMatch();
     void chooseOpponent();
     void showNotice(const std::string &text);
     int pageCount(int item_count, int per_page) const;
@@ -120,15 +140,27 @@ private:
     // Pre-match staging (GAMEPLAY_IMPLEMENTATION 4.3): entrance -> announcer
     // for each wrestler -> bell / "FIGHT".
     enum class IntroStage {
-        Entrance,
-        AnnouncePlayer,
-        AnnounceOpponent,
-        Fight,
-        Done,
+        EntrancePlayer,    // Team 1 walks out on the arena's entrance stage
+        EntranceOpponent,  // Team 2 does the same
+        AnnouncePlayer,    // Ring announcer: "From Death Valley, weighing 309lb..."
+        AnnounceOpponent,  // Ring announcer again for the other side
+        Fight,             // "Fight !" + bell
+        Done,              // The match is live
     };
-    IntroStage intro_stage_ = IntroStage::Entrance;
+    IntroStage intro_stage_ = IntroStage::EntrancePlayer;
     float intro_timer_ = 0.0f;
     float intro_stage_length_ = 0.0f;
+
+    // Entrance running order (CGameEntrance): one show per side, or a single
+    // show for the player alone in a Rumble. A tag show brings both partners.
+    struct EntranceShow {
+        int first = -1;   // the man himself
+        int second = -1;  // his tag partner, when the rule is 2 VS 2
+        int team = 0;
+    };
+    std::vector<EntranceShow> entrance_shows_;
+    std::size_t entrance_show_ = 0;
+    bool intro_skip_ = false;  // the tap that cuts the current stage short
 
     Scene scene_ = Scene::Loading;
     bool ready_ = false;    // renderer up: the app can draw
@@ -181,10 +213,21 @@ private:
     bool red_edge_ = false;
     bool blue_edge_ = false;
     bool paused_ = false;
-    // 0 = 1 VS 1 (rule 0), 1 = Royal Rumble (rule 2), 2 = Tag (rule 1).
-    int mode_ = 0;
+    // The last entrance stage this match asked the renderer for (cached so the
+    // draw path does not look it up twice a frame).
+    const EntranceStage *entrance_stage_ = nullptr;
+    // The InGameTable rule id of the selected mode (menu::kRule*), i.e. the
+    // same value Match::configure takes. Keep it that way: a separate
+    // "menu mode index" here is what left Royal Rumble and Tag Team swapped.
+    int mode_ = menu::kRuleExhibition;
     // Index into AllArenaTable; the art folder is applied when a match starts.
     int arena_index_ = 0;
+    // Road to WrestleMania: how far the run has got, and which card the ladder
+    // is showing. Both live for the session only - there is no save file yet.
+    road::Progress road_;
+    int road_cursor_ = 0;
+    std::string road_result_;
+    bool on_road_ = false;  // the match that just ended was a road card
     // Index of the wrestler the human is driving; a tag hands it to the partner.
     int controlled_ = 0;
     bool tap_pending_ = false;

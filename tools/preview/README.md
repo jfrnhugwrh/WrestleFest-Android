@@ -40,6 +40,22 @@ from `AllArenaTable.sml`, e.g. `ARENA03` Raw, `ARENA04` WrestleMania):
 Every `arena0.png` is 1482x678-679, so the one calibration in `game_renderer.cpp`
 holds for all eleven arena folders.
 
+## Entrance cutscene
+
+```
+/tmp/preview <assets> /tmp/entrance.png --entrance=0 "00_John Cena" "03_BigShow"
+/tmp/preview <assets> /tmp/entrance.png --entrance=1 --arena=ARENA03 "00_John Cena"
+```
+
+`--entrance=<id>` composites one entrance stage, where the id is the
+`AllEntranceSceneTable` record (0 Basic, 1 Modern Raw, 2 Modern SmackDown): the
+arena's crowd sheet, the stage art and its attach objects, the crowd in front of
+it, and the men walking out on it with their own entrance animations. Pass four
+wrestler folders to see a tag-team entrance.
+
+`--entrance-time=<steps>` runs the entrance animation for more or fewer 60 Hz
+steps before the frame is captured (90 by default).
+
 ## Front-end screens
 
 ```
@@ -49,11 +65,13 @@ holds for all eleven arena folders.
 /tmp/preview <assets> /tmp/arena.png  --screen=arena   [--page=N] [--selected=SLOT]
 /tmp/preview <assets> /tmp/loading.png --screen=loading
 /tmp/preview <assets> /tmp/title.png   --screen=title
+/tmp/preview <assets> /tmp/road.png    --screen=road   [--selected=SLOT]
 ```
 
 `--selected` is the highlighted row (main/modes) or card slot (selectors);
 `--page` is the zero-based page of the selector grids. The output is 960x640,
-the game's logical canvas.
+the game's logical canvas. On the Road to WrestleMania ladder `--selected` is
+the card, and `--road-level=N` / `--road-stage=N` place the run's cursor.
 
 ## Comparing with a screenshot of the original
 

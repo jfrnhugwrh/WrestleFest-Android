@@ -21,6 +21,10 @@ constexpr char kLogTag[] = "WrestleFestRender";
 // Sprites and arena art share one scale so a wrestler stands the right height
 // inside the ring trapezoid (1 unit == 1 pixel of the 1482x679 arena art).
 constexpr float kArtScale = 0.72f;
+// CGameEntrance's name plate: the red/black rule is a little over four fifths of
+// the viewport wide, and the WWE mark hangs off its end.
+constexpr float kEntranceRuleWidth = 0.82f;
+constexpr Color kEntranceNameYellow{1.0f, 0.85f, 0.1f, 1.0f};
 
 std::string toString(int value) {
     char buffer[16];
@@ -473,22 +477,268 @@ void GameRenderer::drawActor(const Wrestler &wrestler, float alpha) {
     }
 }
 
-void GameRenderer::drawActorPortrait(const WrestlerProfile &profile, int sst_id, float center_x,
-                                     float feet_y, float alpha, float scale) {
+void GameRenderer::drawActorFrame(const WrestlerProfile &profile, int sst_id, float center_x,
+                                  float feet_y, float alpha, float scale, bool mirrored) {
     const SpriteEntry *sprite = profile.spriteFor(sst_id);
     const FrameTexture *frame = frameFor(profile, sst_id);
     if (sprite == nullptr || frame == nullptr) return;
     if (scale <= 0.0f) scale = kArtScale;
-    const float width = frame->indices.width * scale;
-    const float height = frame->indices.height * scale;
+    const float width = static_cast<float>(frame->indices.width) * scale;
+    const float height = static_cast<float>(frame->indices.height) * scale;
     const float left = center_x - width * 0.5f;
     const float top = feet_y - sprite->y_offset * scale;
     const Color tint{1.0f, 1.0f, 1.0f, alpha};
     if (frame->palette.valid()) {
-        batch_.drawIndexed(frame->indices, frame->palette, left, top, width, height, tint);
+        batch_.drawIndexed(frame->indices, frame->palette, left, top, width, height, tint,
+                           mirrored);
     } else {
-        batch_.draw(frame->indices, left, top, width, height, tint);
+        batch_.draw(frame->indices, left, top, width, height, tint, mirrored);
     }
+}
+
+void GameRenderer::drawActorPortrait(const WrestlerProfile &profile, int sst_id, float center_x,
+                                     float feet_y, float alpha, float scale) {
+    drawActorFrame(profile, sst_id, center_x, feet_y, alpha, scale, false);
+}
+
+void GameRenderer::drawEntranceActor(const WrestlerProfile &profile, int sst_id, float feet_x,
+                                     float feet_y, float facing, float alpha, float scale) {
+    drawActorFrame(profile, sst_id, feet_x, feet_y, alpha, scale, facing < 0.0f);
+}
+
+// ---------------------------------------------------------------------------
+// Crowd (CCrowd)
+// ---------------------------------------------------------------------------
+bool GameRenderer::openCrowdBundle(int person) {
+    if (person < 0 || person >= 15) return false;
+    CrowdCache &cache = crowd_bundles_[person];
+    if (cache.loaded) return !cache.failed;
+    cache.loaded = true;
+    char name[16];
+    std::snprintf(name, sizeof(name), "p%02d.zip", person + 1);
+    const std::string path = std::string("asset_bundles/Sprites/Arena/crowd/") + name;
+    if (assets_ == nullptr) {
+        cache.failed = true;
+        return false;
+    }
+    const std::uint64_t size = assets_->assetSize(path);
+    std::vector<std::uint8_t> ignored;
+    if (size == 0 || !assets_->openAssetRange(path, 1, &ignored, &cache.reader)) {
+        cache.failed = true;
+        return false;
+    }
+    CrowdCache *target = &cache;
+    auto reader = [target](std::size_t offset, std::size_t length, std::uint8_t *destination) {
+        return target->reader && target->reader(offset, length, destination);
+    };
+    if (!cache.archive.openStreaming(static_cast<std::size_t>(size), reader)) {
+        cache.failed = true;
+        return false;
+    }
+    return true;
+}
+
+const GameRenderer::FrameTexture *GameRenderer::crowdFrame(int person, int dir, int frame) {
+    if (person < 0 || person >= 15 || dir < 0 || dir >= 3 || frame < 0 || frame >= 8) {
+        return nullptr;
+    }
+    if (!openCrowdBundle(person)) return nullptr;
+    CrowdCache &cache = crowd_bundles_[person];
+    char name[32];
+    std::snprintf(name, sizeof(name), "ph_P%02d%c_%02d.sst", person + 1,
+                  static_cast<char>('a' + dir), frame + 1);
+    auto cached = cache.textures.find(name);
+    if (cached != cache.textures.end()) {
+        return cached->second.valid ? &cached->second : nullptr;
+    }
+    const ZipEntry *entry = cache.archive.find(name);
+    std::vector<std::uint8_t> sst_bytes;
+    FrameTexture frame_texture;
+    if (entry != nullptr && cache.archive.readStreaming(*entry, &sst_bytes)) {
+        SstSprite decoded;
+        if (decodeSst(sst_bytes.data(), sst_bytes.size(), &decoded)) {
+            if (decoded.palettized) {
+                frame_texture.indices = batch_.uploadIndexMap(decoded);
+                frame_texture.palette = batch_.uploadPalette(decoded.palette);
+                frame_texture.valid = frame_texture.indices.valid() && frame_texture.palette.valid();
+            } else {
+                Image image;
+                image.width = decoded.width;
+                image.height = decoded.height;
+                image.rgba = std::move(decoded.rgba);
+                frame_texture.indices = batch_.uploadRgba(image);
+                frame_texture.valid = frame_texture.indices.valid();
+            }
+        }
+    }
+    if (!frame_texture.valid) {
+        __android_log_print(ANDROID_LOG_WARN, kLogTag, "missing crowd frame %s", name);
+    }
+    return cache.textures.emplace(name, std::move(frame_texture)).first->second.valid
+               ? &cache.textures.at(name)
+               : nullptr;
+}
+
+void GameRenderer::tickCrowd(int crowd_id, float dt) {
+    if (data_ == nullptr) return;
+    const std::vector<CrowdInstance> *list = data_->crowd(crowd_id);
+    if (list == nullptr) return;
+    std::vector<int> &frames = crowd_frames_[crowd_id];
+    if (frames.size() != list->size()) {
+        // Every instance starts on a different frame so the crowd does not bob
+        // in unison.
+        frames.resize(list->size());
+        for (std::size_t i = 0; i < frames.size(); ++i) frames[i] = static_cast<int>(i) & 7;
+    }
+    // tick_crowd: eight frames a second.
+    crowd_clock_ += dt;
+    while (crowd_clock_ >= 0.125f) {
+        crowd_clock_ -= 0.125f;
+        for (int &frame : frames) frame = (frame + 1) & 7;
+    }
+}
+
+void GameRenderer::drawCrowd(const EntranceStage &stage, float dt) {
+    if (data_ == nullptr || !stage.valid) return;
+    const std::vector<CrowdInstance> *list = data_->crowd(stage.crowd_id);
+    if (list == nullptr) return;
+    tickCrowd(stage.crowd_id, dt);
+    const std::vector<int> &frames = crowd_frames_[stage.crowd_id];
+    const float scale = stage.art_scale;
+    for (std::size_t index = 0; index < list->size(); ++index) {
+        const CrowdInstance &instance = (*list)[index];
+        const int frame_number = index < frames.size() ? frames[index] : 0;
+        const FrameTexture *frame = crowdFrame(instance.crowd_id, instance.dir, frame_number);
+        if (frame == nullptr) continue;
+        const CrowdSpriteOffset *offset =
+            data_->crowdOffset(instance.crowd_id, instance.dir, frame_number);
+        const float anchor_x = (offset != nullptr ? offset->x : 0.0f) * scale * instance.scale;
+        const float anchor_y = (offset != nullptr ? offset->y : 0.0f) * scale * instance.scale;
+        const float width = static_cast<float>(frame->indices.width) * scale * instance.scale;
+        const float height = static_cast<float>(frame->indices.height) * scale * instance.scale;
+        const float left = stage.toScreenX(instance.x) -
+                           (instance.facing < 1 ? width - anchor_x : anchor_x);
+        const float top = stage.toScreenY(instance.y) - anchor_y;
+        const Color tint{1.0f, 1.0f, 1.0f, 1.0f};
+        if (frame->palette.valid()) {
+            batch_.drawIndexed(frame->indices, frame->palette, left, top, width, height, tint,
+                               instance.facing < 1);
+        } else {
+            batch_.draw(frame->indices, left, top, width, height, tint, instance.facing < 1);
+        }
+    }
+}
+
+const EntranceStage &GameRenderer::entranceFor(int entrance_scene_id) {
+    auto cached = entrances_.find(entrance_scene_id);
+    if (cached != entrances_.end()) return cached->second;
+
+    EntranceStage stage;
+    const EntranceSceneInfo *info =
+        data_ != nullptr ? data_->entranceScene(entrance_scene_id) : nullptr;
+    if (info != nullptr && assets_ != nullptr && !info->folder.empty() &&
+        !info->scene_file.empty()) {
+        auto load = [&](const std::string &file, Texture *out) {
+            std::vector<std::uint8_t> bytes;
+            const std::string path =
+                "graphics/Sprites/Arena/entrance/" + info->folder + "/" + file;
+            if (!assets_->readAsset(path, &bytes)) return false;
+            Image image;
+            if (!decodePng(bytes.data(), bytes.size(), &image)) return false;
+            *out = batch_.uploadRgba(image);
+            return out->valid();
+        };
+        if (load(info->scene_file, &stage.background)) {
+            stage.art_scale = kArtScale;
+            stage.art_width = static_cast<float>(stage.background.width);
+            stage.art_height = static_cast<float>(stage.background.height);
+            // Same mapping as the ring art: the stage is centred on the canvas
+            // and hangs from the top, so the floor the wrestler walks out onto
+            // is the bottom of the art.
+            stage.origin_x = kLogicalWidth * 0.5f - stage.art_width * 0.5f * kArtScale;
+            stage.origin_y = 0.0f;
+            stage.start_x = info->resolvedStartX(stage.art_width);
+            stage.start_z = info->resolvedStartZ(stage.art_height);
+            stage.gap = info->resolvedGap();
+            stage.max_show_time = info->max_show_time;
+            stage.obj_scale = info->obj_scale;
+            stage.actor_scale = kArtScale * (info->obj_scale > 0.0f ? info->obj_scale : 1.0f);
+            stage.crowd_id = info->crowd_id;
+            stage.valid = true;
+
+            // AttachObjFileName_N: extra pieces pinned to the stage art. Their
+            // offsets and their sizes are both in art pixels and are drawn with
+            // the stage's own scale (CGameEntrance scales by GameObjScale).
+            for (const EntranceAttachObject &object : info->attach) {
+                EntranceStage::Piece piece;
+                if (!load(object.file, &piece.texture)) continue;
+                piece.x = object.offset_x;
+                piece.y = object.offset_y;
+                piece.w = static_cast<float>(piece.texture.width);
+                piece.h = static_cast<float>(piece.texture.height);
+                stage.pieces.push_back(std::move(piece));
+            }
+        }
+    }
+    if (!stage.valid) {
+        __android_log_print(ANDROID_LOG_WARN, kLogTag, "entrance stage %d unavailable",
+                            entrance_scene_id);
+    }
+    return entrances_.emplace(entrance_scene_id, std::move(stage)).first->second;
+}
+
+void GameRenderer::drawEntranceBackground(const EntranceStage &stage) {
+    // The arena floor first: the stage art only covers the top of the canvas and
+    // the wrestler walks out onto the arena below it.
+    if (arena_.ground.valid()) {
+        const float ground_w = static_cast<float>(arena_.ground.width) * arena_.art_scale;
+        const float ground_h = static_cast<float>(arena_.ground.height) * arena_.art_scale;
+        batch_.draw(arena_.ground, kLogicalWidth * 0.5f - ground_w * 0.5f,
+                    kLogicalHeight - ground_h, ground_w, ground_h, Color{});
+    } else {
+        batch_.draw(white_, 0.0f, 0.0f, kLogicalWidth, kLogicalHeight,
+                    Color{0.04f, 0.04f, 0.06f, 1.0f});
+    }
+
+    if (stage.valid && stage.background.valid()) {
+        batch_.draw(stage.background, stage.origin_x, stage.origin_y,
+                    stage.art_width * stage.art_scale, stage.art_height * stage.art_scale,
+                    Color{});
+        for (const EntranceStage::Piece &piece : stage.pieces) {
+            if (!piece.texture.valid()) continue;
+            batch_.draw(piece.texture, stage.toScreenX(piece.x), stage.toScreenY(piece.y),
+                        piece.w * stage.art_scale, piece.h * stage.art_scale, Color{});
+        }
+    }
+}
+
+void GameRenderer::drawEntrancePlate(const std::string &name, const std::string &partner) {
+    // The double rule the name sits on, and the WWE mark at the end of it.
+    const float rule_y = kLogicalHeight - 50.0f;
+    const float rule_width = kLogicalWidth * kEntranceRuleWidth;
+    batch_.draw(white_, 52.0f, rule_y + 2.0f, rule_width, 5.0f, Color{0.02f, 0.02f, 0.02f, 0.9f});
+    batch_.draw(white_, 50.0f, rule_y, rule_width, 5.0f, Color{0.76f, 0.08f, 0.03f, 1.0f});
+    if (wwe_logo_.valid()) {
+        // Add(ruleWidth + 50 - logoW * 0.3, ruleY - logoH * 0.9, logoW * 1.2,
+        //     logoH * 1.2): the mark hangs off the end of the rule.
+        const float w = static_cast<float>(wwe_logo_.width) * 1.2f;
+        const float h = static_cast<float>(wwe_logo_.height) * 1.2f;
+        batch_.draw(wwe_logo_, rule_width + 50.0f - w * 0.25f,
+                    rule_y - static_cast<float>(wwe_logo_.height) * 0.9f, w, h, Color{});
+    }
+
+    if (!font_.valid()) return;
+    const float scale = 40.0f / (font_.metrics().cell_height > 0.0f ? font_.metrics().cell_height
+                                                                   : 24.0f);
+    // The man himself at viewportHeight - 100, his partner 50 px higher.
+    auto line = [&](const std::string &text, float ink_top) {
+        if (text.empty()) return;
+        font_.draw(&batch_, 50.0f - 1.0f, ink_top + 1.0f, scale, text,
+                   Color{0.0f, 0.0f, 0.0f, 0.8f});
+        font_.draw(&batch_, 50.0f, ink_top, scale, text, kEntranceNameYellow);
+    };
+    line(partner, kLogicalHeight - 150.0f);
+    line(name, kLogicalHeight - 100.0f);
 }
 
 void GameRenderer::drawReferee(const Match &match) {
@@ -830,6 +1080,20 @@ const Texture &GameRenderer::avatarFor(const std::string &wrestler_folder) {
         texture = batch_.uploadRgba(image);
     }
     return avatars_.emplace(wrestler_folder, texture).first->second;
+}
+
+const Texture &GameRenderer::roadStageArt(const char *name) {
+    if (name == nullptr || name[0] == '\0') return white_;
+    auto cached = road_stage_art_.find(name);
+    if (cached != road_stage_art_.end()) return cached->second;
+    Texture texture;
+    std::vector<std::uint8_t> bytes;
+    if (assets_ != nullptr &&
+        assets_->readAsset(std::string("ui/Sprites/UI/stage/") + name + ".png", &bytes)) {
+        Image image;
+        if (decodePng(bytes.data(), bytes.size(), &image)) texture = batch_.uploadRgba(image);
+    }
+    return road_stage_art_.emplace(name, std::move(texture)).first->second;
 }
 
 const Texture &GameRenderer::arenaSceneFor(const std::string &arena_folder) {
